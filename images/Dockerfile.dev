@@ -1,0 +1,3 @@
+FROM ubuntu:latest
+WORKDIR /usr/bsan
+ENV DEBIAN_FRONTEND=noninteractive
