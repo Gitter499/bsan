@@ -8,8 +8,8 @@ use core::{mem, ptr};
 
 use libc::{MAP_ANONYMOUS, MAP_NORESERVE, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 
-use crate::global::{GlobalCtx, global_ctx};
-use crate::{BsanAllocHooks, BsanHooks, MUnmap, println};
+use crate::global::{global_ctx, GlobalCtx};
+use crate::{println, BsanAllocHooks, BsanHooks, MUnmap};
 
 /// Different targets have a different number
 /// of significant bits in their pointer representation.
