@@ -1,0 +1,3 @@
+[workspace]
+members = ["bsan-driver", "bsan-rt", "bsan-script", "cargo-bsan"]
+resolver = "3"
