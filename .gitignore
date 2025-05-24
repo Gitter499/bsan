@@ -2,3 +2,4 @@ target
 Makefile
 CMakeCache.txt
 CMakeFiles
+rust-dev

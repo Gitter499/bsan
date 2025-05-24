@@ -1,3 +1,78 @@
-fn main() {
-    println!("Hello, world!");
+#![feature(io_error_more)]
+use anyhow::Result;
+use clap::{command, Parser, Subcommand};
+mod commands;
+mod downloads;
+mod utils;
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum Command {
+    /// Execute all tests and build steps in CI.
+    Ci {
+        /// Flags that are passed through to each subcommand.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        flags: Vec<String>,
+        #[arg(long)]
+        quiet: bool,
+    },
+    /// Build BSan.
+    Build {
+        /// Flags that are passed through to `cargo build`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        flags: Vec<String>,
+        #[arg(long)]
+        quiet: bool,
+    },
+    /// Check BSan.
+    Check {
+        /// Flags that are passed through to `cargo check`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        flags: Vec<String>,
+    },
+    /// Check BSan with Clippy.
+    Clippy {
+        /// Flags that are passed through to `cargo clippy`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        flags: Vec<String>,
+        #[arg(long)]
+        check: bool,
+    },
+    /// Build documentation.
+    Doc {
+        /// Flags that are passed through to `cargo doc`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        flags: Vec<String>,
+    },
+    /// Run the BSan test suite.
+    Test {
+        /// Update stdout/stderr reference files.
+        #[arg(long)]
+        bless: bool,
+        /// Flags that are passed through to the test harness.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        flags: Vec<String>,
+    },
+    /// Format all sources and tests.
+    Fmt {
+        /// Flags that are passed through to `rustfmt`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        flags: Vec<String>,
+        #[arg(long)]
+        check: bool,
+    },
+}
+
+#[derive(Parser)]
+#[command(after_help = "Environment variables:
+  CARGO_EXTRA_FLAGS: Pass extra flags to all cargo invocations")]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+fn main() -> Result<()> {
+    let args = std::env::args();
+    let args = Cli::parse_from(args);
+    args.command.exec()?;
+    Ok(())
 }

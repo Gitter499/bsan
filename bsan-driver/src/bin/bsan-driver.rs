@@ -16,9 +16,7 @@ fn main() {
     let early_dcx = EarlyDiagCtxt::new(ErrorOutputType::default());
     rustc_driver::install_ice_hook(BSAN_BUG_REPORT_URL, |_| ());
 
-    let args = rustc_driver::args::raw_args(&early_dcx)
-        .unwrap_or_else(|_| std::process::exit(rustc_driver::EXIT_FAILURE));
-
+    let args = rustc_driver::args::raw_args(&early_dcx);
     let (args, target_crate) = {
         // If the `BSAN_BE_RUSTC` environment variable is set, we are being invoked as
         // rustc to build a crate for either the "target" architecture, or the "host"
@@ -52,12 +50,6 @@ fn main() {
             (rustc_args, true)
         }
     };
-    let internal_features =
-        rustc_driver::install_ice_hook(rustc_driver::DEFAULT_BUG_REPORT_URL, |_| ());
-    bsan_driver::run_compiler(
-        args,
-        target_crate,
-        &mut bsan_driver::BSanCallBacks {},
-        internal_features,
-    )
+    rustc_driver::install_ice_hook(rustc_driver::DEFAULT_BUG_REPORT_URL, |_| ());
+    bsan_driver::run_compiler(args, target_crate, &mut bsan_driver::BSanCallBacks {})
 }
