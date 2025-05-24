@@ -106,6 +106,8 @@ impl GlobalCtx {
         let mut buffer = BVec::new(self);
         let _ = write!(&mut buffer, "{args}");
         unsafe {
+            // On ARM linux, c_char is an alias for u8
+            #[allow(clippy::useless_transmute)]
             let buffer = mem::transmute::<*const u8, *const c_char>(buffer.as_ptr());
             (self.hooks.print)(buffer);
         }

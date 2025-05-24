@@ -142,6 +142,7 @@ name = "bsan-script"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cc",
  "clap",
  "dunce",
  "path_macro",
