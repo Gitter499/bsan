@@ -1,3 +1,4 @@
+// Our build script is a modified copy of Miri's build script.
 #![feature(io_error_more)]
 use anyhow::Result;
 use clap::{command, Parser, Subcommand};

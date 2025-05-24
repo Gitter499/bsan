@@ -19,7 +19,8 @@ impl Command {
         }
     }
 
-    fn install(env: &mut BsanEnv) -> Result<()> {
+    #[allow(dead_code)]
+    fn install(_env: &mut BsanEnv) -> Result<()> {
         todo!()
     }
 

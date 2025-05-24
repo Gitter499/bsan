@@ -1,4 +1,6 @@
-// The contents of this file have been modified from 
+// The contents of this file have been copied, for the most part,
+// from the Rust compiler's bootstrap script.
+// https://github.com/rust-lang/rust/blob/master/src/bootstrap/src/core/download.rs
 
 use std::fs::{self, File};
 use std::io::{self, BufReader};
