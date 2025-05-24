@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.98"
+cc = "1.2.24"
 clap = { version = "4.5.21", features = ["derive"] }
 dunce = "1.0.5"
 path_macro = "1.0.0"

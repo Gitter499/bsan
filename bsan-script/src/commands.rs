@@ -64,6 +64,7 @@ impl Command {
     }
 
     fn build(env: &mut BsanEnv, flags: &[String], quiet: bool) -> Result<()> {
+        env.build_llvm_pass()?;
         env.build(".", flags, false)?;
         env.with_rust_flags(RT_FLAGS, |env| env.build("bsan-rt", flags, quiet))
     }

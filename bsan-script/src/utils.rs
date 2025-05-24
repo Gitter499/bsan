@@ -1,5 +1,5 @@
 use std::ffi::{OsStr, OsString};
-use std::fs::canonicalize;
+use std::fs::{self, canonicalize};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
@@ -38,6 +38,8 @@ pub fn flagsplit(flags: &str) -> Vec<String> {
 pub struct BsanEnv {
     /// The root of the repository checkout we are working in.
     pub root_dir: PathBuf,
+    /// The installation directory for rust dev artifacts
+    pub rust_dev: PathBuf,
     /// The shell we use.
     pub sh: Shell,
     /// Repository-wide configuration
@@ -47,9 +49,7 @@ pub struct BsanEnv {
     /// Extra flags to pass to cargo.
     cargo_extra_flags: Vec<String>,
     /// Additional version metadata from rustc
-    meta: VersionMeta,
-    /// The installation directory for rust dev artifacts
-    rust_dev: PathBuf,
+    pub meta: VersionMeta,
 }
 
 #[derive(Deserialize)]
@@ -139,7 +139,7 @@ impl BsanEnv {
 
     pub fn fmt(&self, args: &[String], check: bool) -> Result<()> {
         let mut cmd = self.cargo_cmd_base("fmt").args(args);
-        if check && args.iter().any(|s| s.as_str() == "--check") {
+        if check && !args.iter().any(|s| s.as_str() == "--check") {
             cmd = cmd.arg("--check");
         };
         cmd.run()?;
@@ -152,7 +152,11 @@ impl BsanEnv {
     }
 
     pub fn doc(&self, crate_dir: impl AsRef<OsStr>, args: &[String]) -> Result<()> {
-        self.cargo_cmd(crate_dir, "doc").args(args).run()?;
+        let mut cmd = self.cargo_cmd(crate_dir, "doc").args(args);
+        if !args.iter().any(|s| s.as_str() == "--no-deps") {
+            cmd = cmd.arg("--no-deps");
+        };
+        cmd.run()?;
         Ok(())
     }
 
@@ -175,6 +179,39 @@ impl BsanEnv {
             self.cargo_cmd(crate_dir, "build").args(&["--all-targets"]).args(quiet_flag).args(args);
         cmd.set_quiet(quiet);
         cmd.run()?;
+        Ok(())
+    }
+
+    pub fn build_llvm_pass(&mut self) -> Result<()> {
+        let rust_dev_dir = &self.rust_dev;
+        let bin_dir = path!(rust_dev_dir / "bin");
+        let llvm_config = path!(bin_dir / "llvm-config");
+        let cxxflags = cmd!(&self.sh, "{llvm_config}").arg("--cxxflags").output()?.stdout;
+
+        let mut cfg = cc::Build::new();
+        cfg.warnings(false);
+
+        for flag in String::from_utf8(cxxflags)?.split_whitespace() {
+            cfg.flag(flag);
+        }
+
+        let out_dir = path!(&self.root_dir / "target" / "bsan_pass");
+        if !out_dir.exists() {
+            fs::create_dir(&out_dir)?;
+        }
+
+        let src_dir = path!(&self.root_dir / "bsan-pass");
+        cfg.file(path!(src_dir / "BorrowSanitizer.cpp"))
+            .include(src_dir)
+            .cpp(true)
+            .cpp_link_stdlib(None) // we handle this below
+            .out_dir(out_dir)
+            .target(&self.meta.host)
+            .host(&self.meta.host)
+            .opt_level(0)
+            .warnings_into_errors(true)
+            .compile("bsan-pass");
+
         Ok(())
     }
 }
