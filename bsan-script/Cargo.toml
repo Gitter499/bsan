@@ -4,3 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow = "1.0.98"
+clap = { version = "4.5.21", features = ["derive"] }
+dunce = "1.0.5"
+path_macro = "1.0.0"
+rustc_version = "0.4.1"
+semver = "1.0.26"
+serde = { version = "1.0.219", features = ["derive"] }
+tar = "0.4.44"
+toml = "0.8.22"
+which = "7.0.3"
+xshell = "0.2.7"
+xz2 = "0.1.7"

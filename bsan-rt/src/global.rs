@@ -104,7 +104,7 @@ impl GlobalCtx {
     /// `println!`, and `ui_test!` macros.
     pub fn print(&self, args: fmt::Arguments<'_>) {
         let mut buffer = BVec::new(self);
-        let _ = write!(&mut buffer, "{}", args);
+        let _ = write!(&mut buffer, "{args}");
         unsafe {
             let buffer = mem::transmute::<*const u8, *const i8>(buffer.as_ptr());
             (self.hooks.print)(buffer);

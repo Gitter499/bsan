@@ -55,7 +55,7 @@ fn show_version() {
 fn main() {
     env_logger::init();
     let mut args = env::args();
-    debug!("args: {:?}", args);
+    debug!("args: {args:?}",);
 
     // Skip binary name.
     args.next().unwrap();
