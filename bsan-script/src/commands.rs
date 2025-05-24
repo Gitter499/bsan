@@ -19,6 +19,10 @@ impl Command {
         }
     }
 
+    fn install(env: &mut BsanEnv) -> Result<()> {
+        todo!()
+    }
+
     fn ci(env: &mut BsanEnv, flags: &[String], quiet: bool) -> Result<()> {
         Self::fmt(env, flags, true)?;
         Self::clippy(env, flags, true)?;
