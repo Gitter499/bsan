@@ -7,6 +7,6 @@ BorrowSanitizer is work-in-progress LLVM instrumentation pass for detecting alia
 #### 🚧 This is an unstable research prototype 🚧 
 
 ---
-BorrowSanitizer is dual-licensed under [Apache](https://github.com/BorrowSanitizer/rust/blob/bsan/LICENSE-APACHE) and [MIT](https://github.com/BorrowSanitizer/rust/blob/bsan/LICENSE-MIT), following the Rust project.
+BorrowSanitizer is dual-licensed under [Apache](https://github.com/BorrowSanitizer/bsan/blob/main/LICENSE-APACHE) and [MIT](https://github.com/BorrowSanitizer/bsan/blob/main/LICENSE-MIT), following the Rust project.
 
 [<img src="https://borrowsanitizer.com/images/zulip-icon-circle.svg" alt="Zulip" style="height: 1em;"/> Zulip](https://zulip.com/) sponsors free hosting for BorrowSanitizer. Zulip is an organized team chat app designed for efficient communication.
