@@ -106,7 +106,7 @@ impl GlobalCtx {
         let mut buffer = BVec::new(self);
         let _ = write!(&mut buffer, "{args}");
         unsafe {
-            let buffer = mem::transmute::<*const u8, *const i8>(buffer.as_ptr());
+            let buffer = mem::transmute::<*const u8, *const c_char>(buffer.as_ptr());
             (self.hooks.print)(buffer);
         }
     }
