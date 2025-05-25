@@ -2,4 +2,5 @@ target
 Makefile
 CMakeCache.txt
 CMakeFiles
-rust-dev
+.deps
+*.tar.xz

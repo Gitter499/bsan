@@ -3,7 +3,8 @@
 use anyhow::Result;
 use clap::{command, Parser, Subcommand};
 mod commands;
-mod downloads;
+mod download;
+mod env;
 mod utils;
 
 #[derive(Clone, Debug, Subcommand)]

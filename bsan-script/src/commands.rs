@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::utils::BsanEnv;
+use crate::env::BsanEnv;
 use crate::*;
 
 static RT_FLAGS: &[&str] = &["-Cpanic=abort", "-Zpanic_abort_tests"];

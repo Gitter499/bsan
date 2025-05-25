@@ -1,1 +1,3 @@
 artifact_url = 'https://ci-artifacts.rust-lang.org/rustc-builds'
+toolchain = "bc821528634632b4ff8dee5ac1ea4ad90d1b3eb5"
+components = [ "clippy", "rustfmt", "rustc-dev", "llvm-tools"]
