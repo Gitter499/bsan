@@ -81,9 +81,10 @@ fn download_file(sh: &Shell, url: String, destination: &Path, help_on_error: &st
     }
     if curl.quiet().run().is_err() {
         if !help_on_error.is_empty() {
-            eprintln!("{help_on_error}");
+            show_error!("{help_on_error}");
+        } else {
+            std::process::exit(1);
         }
-        std::process::exit(1);
     }
 }
 

@@ -1,6 +1,11 @@
+use std::fs;
+
 use anyhow::Result;
+use path_macro::path;
+use xshell::cmd;
 
 use crate::env::BsanEnv;
+use crate::utils::show_error;
 use crate::*;
 
 static RT_FLAGS: &[&str] = &["-Cpanic=abort", "-Zpanic_abort_tests"];
@@ -42,7 +47,6 @@ impl Command {
     }
 
     fn test(env: &mut BsanEnv, flags: &[String], _bless: bool) -> Result<()> {
-        env.test(".", flags)?;
         env.with_rust_flags(RT_FLAGS, |env| env.test("bsan-rt", flags))
     }
 
@@ -64,8 +68,54 @@ impl Command {
     }
 
     fn build(env: &mut BsanEnv, flags: &[String], quiet: bool) -> Result<()> {
-        env.build_llvm_pass()?;
+        Self::build_llvm_pass(env)?;
         env.build(".", flags, false)?;
         env.with_rust_flags(RT_FLAGS, |env| env.build("bsan-rt", flags, quiet))
+    }
+
+    pub fn build_llvm_pass(env: &mut BsanEnv) -> Result<()> {
+        let cxxflags = env.llvm_config().arg("--cxxflags").output()?.stdout;
+
+        let mut cfg = env.cc();
+        cfg.warnings(false);
+
+        for flag in String::from_utf8(cxxflags)?.split_whitespace() {
+            cfg.flag(flag);
+        }
+
+        let out_dir = path!(&env.root_dir / "target" / "bsan_pass");
+        if out_dir.exists() {
+            fs::remove_dir_all(&out_dir)?;
+        }
+        fs::create_dir_all(&out_dir)?;
+
+        let src_dir = path!(&env.root_dir / "bsan-pass");
+
+        let objects = cfg
+            .file(path!(src_dir / "BorrowSanitizer.cpp"))
+            .include(src_dir)
+            .cpp(true)
+            .cpp_link_stdlib(None)
+            .out_dir(&out_dir)
+            .pic(true)
+            .compile_intermediates();
+
+        let rust_ver = env.meta.semver.to_string();
+        let llvm_ver = env.meta.llvm_version.as_ref().unwrap().major;
+        let suffix = utils::dylib_suffix(&env.meta);
+        let lib_llvm = format!("libLLVM-{llvm_ver}-rust-{rust_ver}.{suffix}");
+
+        let sysroot_libdir = path!(&env.sysroot / "lib");
+        let lib_llvm_path = path!(&env.sysroot / "lib" / lib_llvm);
+
+        if !lib_llvm_path.exists() {
+            show_error!("Unable to locate LLVM within current toolchain ({lib_llvm_path:?}).")
+        }
+
+        let library_name = format!("libbsan.{}", utils::dylib_suffix(&env.meta));
+        let library_path = path!(out_dir / library_name);
+        let cmd = cmd!(env.sh, "cc --shared {objects...} {lib_llvm_path} -o {library_path} -Wl,-rpath={sysroot_libdir}").quiet();
+        cmd.run()?;
+        Ok(())
     }
 }

@@ -236,9 +236,7 @@ fn ui(
 
 fn main() -> Result<()> {
     ui_test::color_eyre::install()?;
-
     let target = get_target();
-
     let tmpdir = tempfile::Builder::new().prefix("bsan-uitest-").tempdir()?;
     ui(Mode::Pass, "tests/pass", &target, WithoutDependencies, tmpdir.path())?;
     ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path())?;

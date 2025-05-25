@@ -1,6 +1,5 @@
 use std::fs::canonicalize;
 use std::path::PathBuf;
-use std::process::exit;
 
 use anyhow::{anyhow, Context, Result};
 use rustc_version::VersionMeta;
@@ -44,13 +43,12 @@ pub fn flagsplit(flags: &str) -> Vec<String> {
     flags.split(' ').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect()
 }
 
-pub fn shared_library_suffix(meta: &VersionMeta) -> &str {
+pub fn dylib_suffix(meta: &VersionMeta) -> &str {
     if meta.host.contains("apple-darwin") {
-        ".dylib"
+        "dylib"
     } else if meta.host.contains("windows") {
-        eprintln!("Target {} is not supported.", &meta.host);
-        exit(1);
+        show_error!("Target {} is not supported.", &meta.host);
     } else {
-        ".so"
+        "so"
     }
 }
