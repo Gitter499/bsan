@@ -3,17 +3,6 @@ set -e
 # We want to call the binary directly, so we need to know where it ends up.
 ROOT_DIR="$(dirname "$0")"
 BSAN_SCRIPT_TARGET_DIR="$ROOT_DIR"/bsan-script/target
-
-assert_installed() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    echo "Error: '$1' is not installed or not in PATH." >&2
-    exit 1
-  fi
-}
-
-assert_installed rustup
-assert_installed cargo
-
 # We need a nightly toolchain, for `-Zroot-dir`.
 cargo build $CARGO_EXTRA_FLAGS --manifest-path "$ROOT_DIR"/bsan-script/Cargo.toml \
   -Zroot-dir="$ROOT_DIR" \
