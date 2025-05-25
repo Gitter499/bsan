@@ -1,7 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::exit;
 
 use anyhow::Result;
 use path_macro::path;
@@ -9,10 +8,13 @@ use rustc_version::VersionMeta;
 use serde::Deserialize;
 use xshell::{cmd, Cmd, Shell};
 
+use crate::utils::show_error;
 use crate::{download, utils};
 
 #[allow(dead_code)]
 pub struct BsanEnv {
+    /// The sysroot of the nightly toolchain.
+    pub sysroot: PathBuf,
     /// The root of the repository checkout we are working in.
     pub root_dir: PathBuf,
     /// The installation directory for rust dev artifacts
@@ -54,6 +56,9 @@ impl BsanEnv {
         let meta = download::toolchain(&sh, &config)?;
         let rust_dev = download::rust_dev(&sh, &config, &meta, &deps_dir)?;
 
+        let sysroot = cmd!(sh, "rustc --print sysroot").output()?.stdout;
+        let sysroot = PathBuf::from(String::from_utf8(sysroot)?.trim_end());
+
         // Hard-code the target dir, since we rely on all binaries ending up in the same spot.
         sh.set_var("CARGO_TARGET_DIR", path!(root_dir / "target"));
 
@@ -74,14 +79,13 @@ impl BsanEnv {
         let mut cargo_extra_flags = utils::flagsplit(&cargo_extra_flags);
         if cargo_extra_flags.iter().any(|a| a == "--release" || a.starts_with("--profile")) {
             // This makes binaries end up in different paths, let's not do that.
-            eprintln!(
+            show_error!(
                 "Passing `--release` or `--profile` in `CARGO_EXTRA_FLAGS` will totally confuse bsan-script, please don't do that."
             );
-            exit(1);
         }
         // Also set `-Zroot-dir` for cargo, to print diagnostics relative to the miri dir.
         cargo_extra_flags.push(format!("-Zroot-dir={}", root_dir.display()));
-        Ok(Self { sh, root_dir, config, cargo_extra_flags, meta, rust_dev })
+        Ok(Self { sh, sysroot, root_dir, config, cargo_extra_flags, meta, rust_dev })
     }
 
     pub fn with_rust_flags<F>(&mut self, flags: &[&str], f: F) -> Result<()>
@@ -160,7 +164,10 @@ impl BsanEnv {
         Ok(())
     }
 
-    fn cc(&self) -> cc::Build {
+    pub fn cc_cmd(&self) -> Cmd<'_> {
+        cmd!(self.sh, "cc").quiet()
+    }
+    pub fn cc(&self) -> cc::Build {
         let mut cfg = cc::Build::new();
         cfg.cargo_debug(false)
             .cargo_metadata(false)
@@ -172,42 +179,10 @@ impl BsanEnv {
         cfg
     }
 
-    pub fn build_llvm_pass(&mut self) -> Result<()> {
+    pub fn llvm_config(&self) -> Cmd<'_> {
         let rust_dev_dir = &self.rust_dev;
-
         let bin_dir = path!(rust_dev_dir / "bin");
         let llvm_config = path!(bin_dir / "llvm-config");
-        let cxxflags = cmd!(&self.sh, "{llvm_config}").arg("--cxxflags").output()?.stdout;
-
-        let mut cfg = self.cc();
-        cfg.warnings(false);
-
-        for flag in String::from_utf8(cxxflags)?.split_whitespace() {
-            cfg.flag(flag);
-        }
-
-        let out_dir = path!(&self.root_dir / "target" / "bsan_pass");
-        if out_dir.exists() {
-            fs::remove_dir_all(&out_dir)?;
-        }
-        fs::create_dir_all(&out_dir)?;
-
-        let src_dir = path!(&self.root_dir / "bsan-pass");
-
-        let objects = cfg
-            .file(path!(src_dir / "BorrowSanitizer.cpp"))
-            .include(src_dir)
-            .cpp(true)
-            .cpp_link_stdlib(None)
-            .out_dir(&out_dir)
-            .pic(true)
-            .compile_intermediates();
-
-        let library_name = format!("libbsan{}", utils::shared_library_suffix(&self.meta));
-        let library_path = path!(out_dir / library_name);
-        let cmd = cmd!(self.sh, "clang --shared {objects...} -o {library_path}").quiet();
-
-        cmd.run()?;
-        Ok(())
+        cmd!(self.sh, "{llvm_config}")
     }
 }
