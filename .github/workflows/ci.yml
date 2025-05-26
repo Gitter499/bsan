@@ -35,4 +35,4 @@ jobs:
         rustup default nightly
         cargo install rustup-toolchain-install-master
     - name: CI
-      run: ./x ci
+      run: ./b ci
