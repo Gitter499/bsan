@@ -13,6 +13,7 @@ use crate::{download, utils};
 
 #[allow(dead_code)]
 pub struct BsanEnv {
+    pub target_dir: PathBuf,
     /// The sysroot of the nightly toolchain.
     pub sysroot: PathBuf,
     /// The root of the repository checkout we are working in.
@@ -59,6 +60,10 @@ impl BsanEnv {
         let sysroot = cmd!(sh, "rustc --print sysroot").output()?.stdout;
         let sysroot = PathBuf::from(String::from_utf8(sysroot)?.trim_end());
 
+        let target_dir = cmd!(sh, "rustc --print target-libdir").output()?.stdout;
+        let mut target_dir = PathBuf::from(String::from_utf8(target_dir)?);
+        assert!(target_dir.pop());
+
         // Hard-code the target dir, since we rely on all binaries ending up in the same spot.
         sh.set_var("CARGO_TARGET_DIR", path!(root_dir / "target"));
 
@@ -85,7 +90,7 @@ impl BsanEnv {
         }
         // Also set `-Zroot-dir` for cargo, to print diagnostics relative to the miri dir.
         cargo_extra_flags.push(format!("-Zroot-dir={}", root_dir.display()));
-        Ok(Self { sh, sysroot, root_dir, config, cargo_extra_flags, meta, rust_dev })
+        Ok(Self { sh, target_dir, sysroot, root_dir, config, cargo_extra_flags, meta, rust_dev })
     }
 
     pub fn with_rust_flags<F>(&mut self, flags: &[&str], f: F) -> Result<()>
@@ -114,6 +119,16 @@ impl BsanEnv {
 
     fn cargo_cmd_base(&self, cmd: &str) -> Cmd<'_> {
         cmd!(self.sh, "cargo +bsan {cmd}").quiet()
+    }
+
+    pub fn target_binary(&self, binary_name: &str) -> PathBuf {
+        let target_bindir = path!(self.target_dir / "bin");
+        let binary = path!(target_bindir / binary_name);
+        if !binary.exists() {
+            show_error!("Unable to locate binary `{binary_name}` within the target bindir ({target_bindir:?}).");
+        } else {
+            binary
+        }
     }
 
     pub fn fmt(&self, args: &[String], check: bool) -> Result<()> {

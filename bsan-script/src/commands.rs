@@ -21,6 +21,8 @@ impl Command {
             Command::Fmt { flags, check } => Self::fmt(&env, &flags, check),
             Command::Doc { flags } => Self::doc(&mut env, &flags),
             Command::Ci { flags, quiet } => Self::ci(&mut env, &flags, quiet),
+            Command::Bin { binary_name, args } => Self::bin(&mut env, binary_name, args),
+            Command::Opt { args } => Self::opt(&mut env, args),
         }
     }
 
@@ -73,7 +75,7 @@ impl Command {
         env.with_rust_flags(RT_FLAGS, |env| env.build("bsan-rt", flags, quiet))
     }
 
-    pub fn build_llvm_pass(env: &mut BsanEnv) -> Result<()> {
+    pub fn build_llvm_pass(env: &mut BsanEnv) -> Result<PathBuf> {
         let cxxflags = env.llvm_config().arg("--cxxflags").output()?.stdout;
 
         let mut cfg = env.cc();
@@ -116,6 +118,21 @@ impl Command {
         let library_path = path!(out_dir / library_name);
         let cmd = cmd!(env.sh, "cc --shared {objects...} {lib_llvm_path} -o {library_path} -Wl,-rpath={sysroot_libdir}").quiet();
         cmd.run()?;
+        Ok(library_path)
+    }
+
+    fn bin(env: &mut BsanEnv, name: String, flags: Vec<String>) -> Result<()> {
+        let binary = env.target_binary(&name);
+        let _ = cmd!(env.sh, "{binary} {flags...}").quiet().run();
+        Ok(())
+    }
+
+    fn opt(env: &mut BsanEnv, args: Vec<String>) -> Result<()> {
+        let pass = Self::build_llvm_pass(env)?;
+        let pass = pass.to_str().unwrap();
+        let opt = env.target_binary("opt");
+        let _ =
+            cmd!(env.sh, "{opt} --load-pass-plugin={pass} -passes=bsan {args...}").quiet().run();
         Ok(())
     }
 }

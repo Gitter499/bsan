@@ -4,3 +4,7 @@ CMakeCache.txt
 CMakeFiles
 .deps
 *.tar.xz
+rust_dev
+*.ll
+*.bc
+*.a
