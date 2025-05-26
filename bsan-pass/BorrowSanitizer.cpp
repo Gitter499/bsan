@@ -1,12 +1,12 @@
 //===- BorrowSanitizer.cpp - Instrumentation for BorrowSanitizer
 //------------===//
 #include "BorrowSanitizer.h"
-#include "llvm/Transforms/Utils/Instrumentation.h"
-#include "llvm/ADT/DepthFirstIterator.h"
 
+#include "llvm/Transforms/Utils/Instrumentation.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
+#include "llvm/Transforms/Utils/EscapeEnumerator.h"
 
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -16,12 +16,17 @@
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/Module.h"
 
+#include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/PostOrderIterator.h"
+
 #include "llvm/Analysis/MemoryBuiltins.h"
+
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugCounter.h"
-#include "llvm/Transforms/Utils/EscapeEnumerator.h"
+
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassPlugin.h"
 
 using namespace llvm;
 
@@ -498,4 +503,32 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
 
     BorrowSanitizerVisitor Visitor(F, *this, TLI);
     return Visitor.runOnFunction();
+}
+
+llvm::PassPluginLibraryInfo getBorrowSanitizerPluginInfo()
+{
+    return {LLVM_PLUGIN_API_VERSION, "BorrowSanitizer", LLVM_VERSION_STRING,
+            [](PassBuilder &PB)
+            {
+                PB.registerPipelineParsingCallback(
+                    [](StringRef Name, ModulePassManager &MPM,
+                       ArrayRef<PassBuilder::PipelineElement>)
+                    {
+                        if (Name == "bsan")
+                        {
+                            MPM.addPass(BorrowSanitizerPass(BorrowSanitizerOptions()));
+                            return true;
+                        }
+                        return false;
+                    });
+            }};
+}
+
+// This is the core interface for pass plugins. It guarantees that 'opt' will
+// be able to recognize BorrowSanitizer when added to the pass pipeline on the
+// command line, i.e. via '-passes=bsan'
+extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
+llvmGetPassPluginInfo()
+{
+    return getBorrowSanitizerPluginInfo();
 }

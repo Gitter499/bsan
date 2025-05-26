@@ -1,5 +1,7 @@
 // Our build script is a modified copy of Miri's build script.
 #![feature(io_error_more)]
+use std::path::PathBuf;
+
 use anyhow::Result;
 use clap::{command, Parser, Subcommand};
 mod commands;
@@ -61,6 +63,19 @@ pub enum Command {
         flags: Vec<String>,
         #[arg(long)]
         check: bool,
+    },
+    /// Execute a binary within the target bindir of the sysroot.
+    Bin {
+        binary_name: String,
+        /// Args that are passed through to the executable.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Instrument an LLVM bitcode file using the BorrowSanitizer pass
+    Opt {
+        /// Flags that are passed through to `opt`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
 }
 
