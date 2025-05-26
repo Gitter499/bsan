@@ -116,7 +116,11 @@ impl Command {
 
         let library_name = format!("libbsan.{}", utils::dylib_suffix(&env.meta));
         let library_path = path!(out_dir / library_name);
-        let cmd = cmd!(env.sh, "cc --shared {objects...} {lib_llvm} -o {library_path} -Wl,-rpath={lib_dir}").quiet();
+        let cmd = cmd!(
+            env.sh,
+            "cc --shared {objects...} {lib_llvm} -o {library_path} -Wl,-rpath={lib_dir}"
+        )
+        .quiet();
         cmd.run()?;
         Ok(library_path)
     }
