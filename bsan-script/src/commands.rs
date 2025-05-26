@@ -107,16 +107,16 @@ impl Command {
         let suffix = utils::dylib_suffix(&env.meta);
         let lib_llvm = format!("libLLVM-{llvm_ver}-rust-{rust_ver}.{suffix}");
 
-        let sysroot_libdir = path!(&env.sysroot / "lib");
-        let lib_llvm_path = path!(&env.sysroot / "lib" / lib_llvm);
+        let lib_dir: PathBuf = path!(&env.rust_dev / "lib");
+        let lib_llvm: PathBuf = path!(lib_dir / lib_llvm);
 
-        if !lib_llvm_path.exists() {
-            show_error!("Unable to locate LLVM within current toolchain ({lib_llvm_path:?}).")
+        if !lib_llvm.exists() {
+            show_error!("Unable to locate LLVM within rust_dev artifacts ({lib_llvm:?}).")
         }
 
         let library_name = format!("libbsan.{}", utils::dylib_suffix(&env.meta));
         let library_path = path!(out_dir / library_name);
-        let cmd = cmd!(env.sh, "cc --shared {objects...} {lib_llvm_path} -o {library_path} -Wl,-rpath={sysroot_libdir}").quiet();
+        let cmd = cmd!(env.sh, "cc --shared {objects...} {lib_llvm} -o {library_path} -Wl,-rpath={lib_dir}").quiet();
         cmd.run()?;
         Ok(library_path)
     }
