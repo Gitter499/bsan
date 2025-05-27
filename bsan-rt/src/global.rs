@@ -11,10 +11,10 @@ use core::num::NonZeroUsize;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
-use libc_print::std_name::*;
 
 use block::*;
 use hashbrown::{DefaultHashBuilder, HashMap};
+use libc_print::std_name::*;
 use rustc_hash::FxBuildHasher;
 
 use crate::shadow::ShadowHeap;
@@ -45,7 +45,7 @@ impl GlobalCtx {
     /// This function will also initialize our shadow heap
     fn new(hooks: BsanHooks) -> Self {
         Self {
-            hooks: hooks.clone(),
+            hooks,
             next_alloc_id: AtomicUsize::new(AllocId::min().get()),
             next_thread_id: AtomicUsize::new(0),
             shadow_heap: ShadowHeap::new(&hooks),
