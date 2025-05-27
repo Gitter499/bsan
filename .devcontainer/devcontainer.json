@@ -5,5 +5,11 @@
 	},
 	"remoteEnv": {
 		"PATH": "${containerEnv:PATH}:${containerWorkspaceFolder}"
+	},
+	"customizations": {
+		"vscode": {
+		"settings": {},
+		"extensions": ["rust-lang.rust-analyzer"]
+		}
 	}
 }
