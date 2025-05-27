@@ -70,6 +70,16 @@ impl BsanEnv {
         // Compute rustflags.
         let rustflags = {
             let mut flags = OsString::new();
+            // We set the rpath so that Miri finds the private rustc libraries it needs.
+            // (This only makes sense on Unix.)
+            if cfg!(unix) {
+                flags.push("-C link-args=-Wl,-rpath,");
+                flags.push(&path!(target_dir / "lib"));
+            }
+            // Enable rustc-specific lints (ignored without `-Zunstable-options`).
+            flags.push(
+                " -Zunstable-options -Wrustc::internal -Wrust_2018_idioms -Wunused_lifetimes",
+            );
             // Add user-defined flags.
             if let Some(value) = std::env::var_os("RUSTFLAGS") {
                 flags.push(" ");
@@ -199,5 +209,20 @@ impl BsanEnv {
         let bin_dir = path!(rust_dev_dir / "bin");
         let llvm_config = path!(bin_dir / "llvm-config");
         cmd!(self.sh, "{llvm_config}")
+    }
+
+    pub fn install(
+        &self,
+        crate_dir: impl AsRef<OsStr>,
+        _install_dir: impl AsRef<OsStr>,
+        args: impl IntoIterator<Item = impl AsRef<OsStr>>,
+    ) -> Result<()> {
+        let BsanEnv { cargo_extra_flags, .. } = self;
+        let path = path!(self.root_dir / crate_dir.as_ref());
+        // Install binaries to the miri toolchain's `sysroot` so they do not interact with other toolchains.
+        // (Not using `cargo_cmd` as `install` is special and doesn't use `--manifest-path`.)
+        cmd!(self.sh, "cargo +bsan install {cargo_extra_flags...} --path {path} --force {args...}")
+            .run()?;
+        Ok(())
     }
 }

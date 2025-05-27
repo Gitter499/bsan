@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use cargo_metadata::{Metadata, MetadataCommand};
+use path_macro::path;
 
 use crate::arg::*;
 
@@ -41,14 +42,25 @@ pub(crate) use show_error;
 
 /// Debug-print a command that is going to be run.
 pub fn debug_cmd(prefix: &str, verbose: usize, cmd: &Command) {
-    if verbose == 0 {
-        return;
+    if verbose != 0 {
+        eprintln!("{prefix} running command: {cmd:?}");
     }
-    eprintln!("{prefix} running command: {cmd:?}");
 }
 
 pub fn cargo() -> Command {
     Command::new(env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")))
+}
+
+pub fn find_bsan_plugin(verbose: usize) -> Option<PathBuf> {
+    env::var_os("BSAN_PLUGIN").map(|o| o.into()).or_else(|| {
+        let sysroot = get_host_sysroot_dir(verbose);
+        let plugin = path!(sysroot / "lib" / "libbsan.so");
+        if plugin.exists() {
+            Some(plugin)
+        } else {
+            None
+        }
+    })
 }
 
 /// Returns the path to the `bsan` binary

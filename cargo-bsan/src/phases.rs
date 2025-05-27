@@ -20,6 +20,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
             "`cargo bsan` needs to be called with a subcommand (e.g `run`, `test`, `clean`)"
         );
     };
+
     let subcommand = match &*subcommand {
         "setup" => BSANCommand::Setup,
         "test" | "t" | "run" | "r" | "nextest" => BSANCommand::Forward(subcommand),
@@ -28,6 +29,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
             "`cargo bsan` supports the following subcommands: `run`, `test`, `nextest`, `clean`, and `setup`."
         ),
     };
+
     let verbose = num_arg_flag("-v");
     let quiet = has_arg_flag("-q") || has_arg_flag("--quiet");
 
@@ -35,6 +37,11 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     let rustc_version = VersionMeta::for_command(bsan_for_host()).unwrap_or_else(|err| {
         panic!("failed to determine underlying rustc version of BSAN ({:?}):\n{err:?}", bsan())
     });
+
+    let Some(bsan_plugin) = find_bsan_plugin(verbose) else {
+        show_error!("failed to locate the BorrowSanitizer LLVM plugin within the host sysroot.");
+    };
+    env::set_var("BSAN_PLUGIN", bsan_plugin);
 
     let targets = get_arg_flag_values("--target").collect::<Vec<_>>();
 
@@ -52,7 +59,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         return;
     }
 
-    setup(&subcommand, rustc_version.host.as_str(), &rustc_version, verbose, quiet);
+    setup_sysroot(&subcommand, rustc_version.host.as_str(), &rustc_version, verbose, quiet);
 
     let bsan_sysroot = get_target_sysroot_dir();
     let bsan_path = find_bsan();

@@ -190,6 +190,7 @@ dependencies = [
  "directories",
  "env_logger",
  "log",
+ "path_macro",
  "rustc-build-sysroot",
  "rustc_tools_util",
  "rustc_version",

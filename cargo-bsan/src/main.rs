@@ -59,7 +59,6 @@ fn main() {
 
     // Skip binary name.
     args.next().unwrap();
-
     // Dispatch running as part of sysroot compilation.
     if env::var_os("BSAN_CALLED_FROM_SETUP").is_some() {
         phase_rustc(args, RustcPhase::Setup);
@@ -73,7 +72,9 @@ fn main() {
     };
 
     match first.as_str() {
-        "bsan" => phase_cargo_bsan(args),
+        "bsan" => {
+            phase_cargo_bsan(args)
+        },
         arg if arg == env::var("RUSTC").unwrap_or_else(|_| {
             show_error!(
                 "`cargo-miri` called without RUSTC set; please only invoke this binary through `cargo miri`"

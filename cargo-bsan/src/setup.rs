@@ -15,7 +15,7 @@ use crate::*;
 /// Performs the setup required to make `cargo bsan` work: Getting a custom-built libstd. Then sets
 /// `BSAN_SYSROOT`. Skipped if `BSAN_SYSROOT` is already set, in which case we expect the user has
 /// done all this already.
-pub fn setup(
+pub fn setup_sysroot(
     subcommand: &BSANCommand,
     target: &str,
     rustc_version: &VersionMeta,
@@ -26,9 +26,10 @@ pub fn setup(
     let ask_user = !only_setup;
     let print_sysroot = only_setup && has_arg_flag("--print-sysroot"); // whether we just print the sysroot path
     let show_setup = only_setup && !print_sysroot;
+
     if !only_setup {
         if let Some(sysroot) = std::env::var_os("BSAN_SYSROOT") {
-            // Skip setup step if MIRI_SYSROOT is explicitly set, *unless* we are `cargo bsan setup`.
+            // Skip setup step if BSAN_SYSROOT is explicitly set, *unless* we are `cargo bsan setup`.
             return sysroot.into();
         }
     }

@@ -4,7 +4,7 @@ set -e
 ROOT_DIR="$(dirname "$0")"
 BSAN_SCRIPT_TARGET_DIR="$ROOT_DIR"/bsan-script/target
 # We need a nightly toolchain, for `-Zroot-dir`.
-cargo build $CARGO_EXTRA_FLAGS --manifest-path "$ROOT_DIR"/bsan-script/Cargo.toml \
+cargo +nightly build $CARGO_EXTRA_FLAGS --manifest-path "$ROOT_DIR"/bsan-script/Cargo.toml \
   -Zroot-dir="$ROOT_DIR" \
   -q --target-dir "$BSAN_SCRIPT_TARGET_DIR" $MESSAGE_FORMAT || \
   ( echo "Failed to build bsan-script."; exit 1 )
