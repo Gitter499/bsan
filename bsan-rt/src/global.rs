@@ -273,8 +273,7 @@ pub unsafe fn global_ctx<'a>() -> &'a GlobalCtx {
 }
 
 unsafe extern "C" fn default_exit() -> ! {
-    // we compile w
-    panic!()
+    libc::exit(0)
 }
 
 pub static DEFAULT_HOOKS: BsanHooks = BsanHooks {
