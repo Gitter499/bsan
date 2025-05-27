@@ -14,6 +14,7 @@ impl Command {
     pub fn exec(self) -> Result<()> {
         let mut env = BsanEnv::new()?;
         match self {
+            Command::Setup => Ok(()),
             Command::Build { flags, quiet } => Self::build(&mut env, &flags, quiet),
             Command::Check { flags } => Self::check(&mut env, &flags),
             Command::Clippy { flags, check } => Self::clippy(&mut env, &flags, check),
