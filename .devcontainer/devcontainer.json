@@ -10,11 +10,14 @@
 		"ghcr.io/devcontainers/features/github-cli:1": {
 			"version": "latest"
 		}
- 	},
+	},
 	"customizations": {
 		"vscode": {
-		"settings": {},
-		"extensions": ["rust-lang.rust-analyzer"]
+			"settings": {},
+			"extensions": [
+				"rust-lang.rust-analyzer"
+			]
 		}
-	}
+	},
+	"postStartCommand": "xb setup"
 }

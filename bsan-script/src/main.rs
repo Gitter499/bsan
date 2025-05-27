@@ -11,6 +11,7 @@ mod utils;
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum Command {
+    Setup,
     /// Execute all tests and build steps in CI.
     Ci {
         /// Flags that are passed through to each subcommand.
