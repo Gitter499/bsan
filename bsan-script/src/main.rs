@@ -11,6 +11,7 @@ mod utils;
 
 #[derive(Clone, Debug, Subcommand)]
 pub enum Command {
+    /// Ensures that all dependencies have been installed.
     Setup,
     /// Execute all tests and build steps in CI.
     Ci {
@@ -20,21 +21,23 @@ pub enum Command {
         #[arg(long)]
         quiet: bool,
     },
-    /// Build BSan.
+    /// Build BorrowSanitizer.
     Build {
         /// Flags that are passed through to `cargo build`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         flags: Vec<String>,
         #[arg(long)]
         quiet: bool,
+        #[arg(long)]
+        release: bool,
     },
-    /// Check BSan.
+    /// Check BorrowSanitizer.
     Check {
         /// Flags that are passed through to `cargo check`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         flags: Vec<String>,
     },
-    /// Check BSan with Clippy.
+    /// Check components with Clippy.
     Clippy {
         /// Flags that are passed through to `cargo clippy`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -48,7 +51,7 @@ pub enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         flags: Vec<String>,
     },
-    /// Run the BSan test suite.
+    /// Run the test suite.
     Test {
         /// Update stdout/stderr reference files.
         #[arg(long)]
@@ -78,10 +81,13 @@ pub enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Installs binaries into the custom toolchain.
     Install {
         /// Flags that are passed through to `cargo install`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+        #[arg(long)]
+        quiet: bool,
     },
 }
 

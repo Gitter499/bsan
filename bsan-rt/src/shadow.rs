@@ -5,12 +5,11 @@ use core::ops::{Add, BitAnd, Deref, DerefMut, Shr};
 use core::ptr::NonNull;
 use core::slice::SliceIndex;
 use core::{mem, ptr};
-use crate::DEFAULT_HOOKS;
 
 use libc::{MAP_ANONYMOUS, MAP_NORESERVE, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 
 use crate::global::{global_ctx, GlobalCtx};
-use crate::{BsanAllocHooks, BsanHooks, MUnmap};
+use crate::{BsanAllocHooks, BsanHooks, MUnmap, DEFAULT_HOOKS};
 
 /// Different targets have a different number
 /// of significant bits in their pointer representation.

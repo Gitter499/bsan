@@ -18,6 +18,3 @@ doctest = false # but no doc tests
 
 [features]
 ui_test = []
-
-[build-dependencies]
-cbindgen = "0.28.0"
