@@ -6,8 +6,7 @@ use std::env;
 
 pub const BSAN_BUG_REPORT_URL: &str = "https://github.com/BorrowSanitizer/rust/issues/new";
 
-pub const BSAN_DEFAULT_ARGS: &[&str] =
-    &["--cfg=bsan", "-Zsanitizer=borrow", "-Zmir-emit-retag", "-Zmir-opt-level=0"];
+pub const BSAN_DEFAULT_ARGS: &[&str] = &["--cfg=bsan", "-Zmir-opt-level=0"];
 
 pub struct BSanCallBacks {}
 impl rustc_driver::Callbacks for BSanCallBacks {}
@@ -21,6 +20,9 @@ pub fn run_compiler(mut args: Vec<String>, target_crate: bool, callbacks: &mut B
             let rt = runtime.to_string_lossy();
             additional_args.push(format!("-L{rt}/lib"));
         }
+        let plugin = env::var("BSAN_PLUGIN").expect("BSAN_PLUGIN environment variable not set.");
+        additional_args.push(format!("-Zllvm-plugins={plugin}"));
+        additional_args.push("-Cpasses=bsan".to_string());
         args.splice(1..1, additional_args);
     }
     rustc_driver::run_compiler(&args, callbacks);

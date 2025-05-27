@@ -8,7 +8,7 @@ use std::env;
 use rustc_session::config::ErrorOutputType;
 use rustc_session::EarlyDiagCtxt;
 
-const BSAN_BUG_REPORT_URL: &str = "https://github.com/BorrowSanitizer/rust/issues/new";
+const BSAN_BUG_REPORT_URL: &str = "https://github.com/BorrowSanitizer/bsan/issues/new";
 
 fn main() {
     // Initialize logging, diagnostics, and ICE hook.
@@ -40,7 +40,7 @@ fn main() {
             // after the "--" separator, since these will be passed to the compiled binary
             // when it executes.
             let mut rustc_args = vec![];
-            for arg in args.iter() {
+            for arg in args.iter().skip(1) {
                 if arg == "--" {
                     break;
                 } else {

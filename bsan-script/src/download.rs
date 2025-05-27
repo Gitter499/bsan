@@ -222,7 +222,7 @@ pub fn ask_to_run(cmd: Cmd<'_>, ask: bool, text: &str) -> Result<()> {
     let is_ci = is_running_on_ci();
     if ask && !is_ci {
         let mut buf = String::new();
-        print!("I will run `{cmd:?}` to {text}. Proceed? [Y/n] ");
+        print!("I will run `{cmd}` to {text}. Proceed? [Y/n] ");
         io::stdout().flush().unwrap();
         io::stdin().read_line(&mut buf).unwrap();
         match buf.trim().to_lowercase().as_ref() {
