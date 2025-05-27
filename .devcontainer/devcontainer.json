@@ -6,6 +6,11 @@
 	"remoteEnv": {
 		"PATH": "${containerEnv:PATH}:${containerWorkspaceFolder}"
 	},
+	"features": {
+		"ghcr.io/devcontainers/features/github-cli:1": {
+			"version": "latest"
+		}
+ 	},
 	"customizations": {
 		"vscode": {
 		"settings": {},
