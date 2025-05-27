@@ -2,6 +2,9 @@ use std::env;
 use std::path::Path;
 
 fn main() {
+
+
+    
     let crate_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let out_dir = env::var("BSAN_HEADER_DIR").unwrap_or(env::var("OUT_DIR").unwrap());
     cbindgen::Builder::new()

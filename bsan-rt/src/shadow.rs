@@ -5,11 +5,12 @@ use core::ops::{Add, BitAnd, Deref, DerefMut, Shr};
 use core::ptr::NonNull;
 use core::slice::SliceIndex;
 use core::{mem, ptr};
+use crate::DEFAULT_HOOKS;
 
 use libc::{MAP_ANONYMOUS, MAP_NORESERVE, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 
 use crate::global::{global_ctx, GlobalCtx};
-use crate::{println, BsanAllocHooks, BsanHooks, MUnmap};
+use crate::{BsanAllocHooks, BsanHooks, MUnmap};
 
 /// Different targets have a different number
 /// of significant bits in their pointer representation.
@@ -173,35 +174,7 @@ mod tests {
 
     use crate::global::{deinit_global_ctx, init_global_ctx};
     use crate::shadow::*;
-    use crate::{BsanAllocHooks, BsanHooks, Exit, Free, MMap, MUnmap, Malloc, Print};
-
-    unsafe extern "C" fn test_print(_: *const c_char) {}
-    unsafe extern "C" fn test_exit() -> ! {
-        std::process::exit(0)
-    }
-
-    const TEST_HOOKS: BsanHooks = BsanHooks {
-        alloc: BsanAllocHooks { malloc: libc::malloc as Malloc, free: libc::free as Free },
-        mmap: test_mmap,
-        munmap: test_munmap,
-        print: test_print,
-        exit: test_exit,
-    };
-
-    unsafe extern "C" fn test_mmap(
-        addr: *mut c_void,
-        size: usize,
-        prot: i32,
-        flags: i32,
-        fd: i32,
-        offset: c_ulonglong,
-    ) -> *mut c_void {
-        libc::mmap(addr, size, prot, flags, fd, offset as i64)
-    }
-
-    unsafe extern "C" fn test_munmap(ptr: *mut c_void, size: usize) -> i32 {
-        libc::munmap(ptr, size)
-    }
+    use crate::{BsanAllocHooks, BsanHooks, Exit, Free, MMap, MUnmap, Malloc};
 
     #[derive(Default, Debug, Copy, Clone)]
     struct TestProv {
@@ -218,24 +191,24 @@ mod tests {
 
     #[test]
     fn test_shadow_heap_creation() {
-        ShadowHeap::<TestProv>::new(&TEST_HOOKS);
+        ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS);
     }
 
     #[test]
     fn test_load_null_prov() {
-        let heap = ShadowHeap::<TestProv>::new(&TEST_HOOKS);
+        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS);
         let prov = unsafe { heap.load_prov(0) };
         assert_eq!(prov.value, 0);
     }
 
     #[test]
     fn test_store_and_load_prov() {
-        let heap = ShadowHeap::<TestProv>::new(&TEST_HOOKS);
+        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS);
         let test_prov = TestProv { value: 42 };
         // Use an address that will split into non-zero indices for both L1 and L2
         let addr = 0x1234_5678_1234_5678;
         unsafe {
-            heap.store_prov(&TEST_HOOKS, &test_prov, addr);
+            heap.store_prov(&DEFAULT_HOOKS, &test_prov, addr);
             let loaded_prov = heap.load_prov(addr);
             assert_eq!(loaded_prov.value, test_prov.value);
         }
@@ -243,7 +216,7 @@ mod tests {
 
     #[test]
     fn smoke() {
-        let heap = ShadowHeap::<TestProv>::new(&TEST_HOOKS);
+        let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS);
 
         // Create test data
         const NUM_OPERATIONS: usize = 10000;
@@ -256,7 +229,7 @@ mod tests {
         unsafe {
             for (i, test_value) in test_values.iter().enumerate().take(NUM_OPERATIONS) {
                 let addr = BASE_ADDR + (i * 8);
-                heap.store_prov(&TEST_HOOKS, test_value, addr);
+                heap.store_prov(&DEFAULT_HOOKS, test_value, addr);
                 let prov = heap.load_prov(addr);
                 assert_eq!(prov.value, test_value.value);
             }
@@ -265,7 +238,7 @@ mod tests {
                 let addr = BASE_ADDR + (i * 8);
                 let prov = heap.load_prov(addr);
                 assert_eq!(prov.value, test_value.value);
-                heap.store_prov(&TEST_HOOKS, test_value, addr);
+                heap.store_prov(&DEFAULT_HOOKS, test_value, addr);
             }
         }
     }

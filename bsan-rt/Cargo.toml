@@ -8,6 +8,7 @@ libc = { version = "0.2.169", default-features = false }
 hashbrown = { version = "0.15.2", default-features = false, features = ["default-hasher", "nightly", "inline-more"] }
 rustc-hash = { version = "2.1.1", default-features = false }
 smallvec = { version = "1.14.0" }
+libc-print = { version = "0.1.23" }
 
 [lib]
 name = "bsan_rt"
