@@ -263,6 +263,11 @@ impl BsanEnv {
         Ok(())
     }
 
+    pub fn artifact_dir(&self) -> PathBuf {
+        let artifact_subdir = self.mode.cargo_output_dir();
+        path!(self.build_dir / artifact_subdir)
+    }
+
     pub fn test(&self, crate_dir: impl AsRef<OsStr>, args: &[String]) -> Result<()> {
         self.cargo_cmd(crate_dir, "test").args(args).run()?;
         Ok(())

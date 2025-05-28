@@ -8,7 +8,7 @@ use crate::env::{BsanEnv, Mode};
 use crate::utils::show_error;
 use crate::*;
 
-static RT_FLAGS: &[&str] = &["-Cpanic=abort", "-Zpanic_abort_tests"];
+static RT_FLAGS: &[&str] = &["-Cpanic=abort", "-Zpanic_abort_tests", "-Cembed-bitcode=yes", "-Clto"];
 
 impl Command {
     pub fn exec(self) -> Result<()> {
@@ -95,10 +95,7 @@ impl Command {
             cfg.flag(flag);
         }
 
-        let out_dir = path!(&env.root_dir / "target" / "bsan_pass");
-        if out_dir.exists() {
-            fs::remove_dir_all(&out_dir)?;
-        }
+        let out_dir = env.artifact_dir();
         fs::create_dir_all(&out_dir)?;
 
         let src_dir = path!(&env.root_dir / "bsan-pass");
@@ -124,8 +121,9 @@ impl Command {
             show_error!("Unable to locate LLVM within rust_dev artifacts ({lib_llvm:?}).")
         }
 
-        let library_name = format!("libbsan.{}", utils::dylib_suffix(&env.meta));
+        let library_name = format!("libbsan_plugin.{}", utils::dylib_suffix(&env.meta));
         let library_path = path!(out_dir / library_name);
+
         let cmd = cmd!(
             env.sh,
             "cc --shared {objects...} {lib_llvm} -o {library_path} -Wl,-rpath={lib_dir}"
@@ -146,7 +144,10 @@ impl Command {
         env.with_rust_flags(RT_FLAGS, |env| env.build("bsan-rt", flags, quiet))?;
         let artifact = env.assert_artifact("libbsan_rt.a");
         let llvm_objcopy = env.target_binary("llvm-objcopy");
-        cmd!(env.sh, "{llvm_objcopy} -w --keep-global-symbol=bsan_*").arg(&artifact).run()?;
+        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_*")
+            .arg(&artifact)
+            .quiet()
+            .run()?;
         Ok(artifact)
     }
 

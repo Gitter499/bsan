@@ -51,16 +51,26 @@ pub fn cargo() -> Command {
     Command::new(env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")))
 }
 
-pub fn find_bsan_plugin(verbose: usize) -> Option<PathBuf> {
+pub fn find_bsan_plugin(sysroot: &Path) -> Option<PathBuf> {
     env::var_os("BSAN_PLUGIN").map(|o| o.into()).or_else(|| {
-        let sysroot = get_host_sysroot_dir(verbose);
-        let plugin = path!(sysroot / "lib" / "libbsan.so");
+        let plugin = path!(sysroot / "lib" / "libbsan_plugin.so");
         if plugin.exists() {
             Some(plugin)
         } else {
             None
         }
     })
+}
+
+pub fn find_bsan_runtime(sysroot: &Path) -> Option<PathBuf> {
+    let sysroot_var = env::var_os("BSAN_RT_SYSROOT");
+    let sysroot_dir = sysroot_var.as_ref().map(Path::new).unwrap_or(sysroot);
+    let plugin = path!(sysroot_dir / "lib" / "libbsan_rt.a");
+    if plugin.exists() {
+        Some(plugin)
+    } else {
+        None
+    }
 }
 
 /// Returns the path to the `bsan` binary
