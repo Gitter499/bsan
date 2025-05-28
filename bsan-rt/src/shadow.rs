@@ -104,44 +104,49 @@ impl<T> ShadowHeap<T> {
     }
 
     unsafe fn allocate_l2_table(&self, hooks: &BsanHooks) -> *mut [T; L2_LEN] {
-        let l2_void = (hooks.mmap)(
-            ptr::null_mut(),
-            mem::size_of::<T>() * L2_LEN,
-            PROT_SHADOW,
-            MAP_SHADOW,
-            -1,
-            0,
-        );
+        let l2_void = unsafe {
+            (hooks.mmap)(
+                ptr::null_mut(),
+                mem::size_of::<T>() * L2_LEN,
+                PROT_SHADOW,
+                MAP_SHADOW,
+                -1,
+                0,
+            )
+        };
         assert!(!l2_void.is_null() && l2_void != (-1isize as *mut c_void));
-        ptr::write_bytes(l2_void as *mut u8, 0, mem::size_of::<T>() * L2_LEN);
-        mem::transmute(l2_void)
+        unsafe { ptr::write_bytes(l2_void as *mut u8, 0, mem::size_of::<T>() * L2_LEN) };
+        unsafe { mem::transmute(l2_void) }
     }
 }
 
 impl<T: Default + Copy> ShadowHeap<T> {
-    pub unsafe fn load_prov(&self, addr: usize) -> T {
-        let (l1_index, l2_index) = table_indices(addr);
+    pub fn load_prov(&self, addr: usize) -> T {
+        unsafe {
+            let (l1_index, l2_index) = table_indices(addr);
 
-        let l2_table: *mut [T; L2_LEN] = (*self.table)[l1_index];
+            let l2_table: *mut [T; L2_LEN] = (*self.table)[l1_index];
 
-        if l2_table.is_null() {
-            return T::default();
+            if l2_table.is_null() {
+                return T::default();
+            }
+
+            (*l2_table)[l2_index]
         }
-
-        (*l2_table)[l2_index]
     }
 
-    pub unsafe fn store_prov(&self, hooks: &BsanHooks, prov: *const T, addr: usize) {
+    pub fn store_prov(&self, hooks: &BsanHooks, prov: *const T, addr: usize) {
         let (l1_index, l2_index) = table_indices(addr);
+        unsafe {
+            let l2_table_ptr: *mut *mut [T; L2_LEN] = &raw mut (*self.table)[l1_index];
 
-        let l2_table_ptr: *mut *mut [T; L2_LEN] = &raw mut (*self.table)[l1_index];
+            if (*l2_table_ptr).is_null() {
+                *l2_table_ptr = self.allocate_l2_table(hooks);
+            }
 
-        if (*l2_table_ptr).is_null() {
-            *l2_table_ptr = self.allocate_l2_table(hooks);
+            let slot: *mut T = &raw mut ((**l2_table_ptr)[l2_index]);
+            *slot = *prov;
         }
-
-        let slot: *mut T = &raw mut ((**l2_table_ptr)[l2_index]);
-        *slot = *prov;
     }
 }
 

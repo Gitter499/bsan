@@ -8,7 +8,16 @@ use crate::env::{BsanEnv, Mode};
 use crate::utils::show_error;
 use crate::*;
 
-static RT_FLAGS: &[&str] = &["-Cpanic=abort", "-Zpanic_abort_tests", "-Cembed-bitcode=yes", "-Clto"];
+static BSAN_RT: &str = "libbsan_rt.a";
+
+#[cfg(target_os = "macos")]
+static BSAN_PLUGIN: &str = "libbsan_plugin.dylib";
+
+#[cfg(target_os = "linux")]
+static BSAN_PLUGIN: &str = "libbsan_plugin.so";
+
+static RT_FLAGS: &[&str] =
+    &["-Cpanic=abort", "-Zpanic_abort_tests", "-Cembed-bitcode=yes", "-Clto"];
 
 impl Command {
     pub fn exec(self) -> Result<()> {
@@ -32,8 +41,8 @@ impl Command {
 
     #[allow(dead_code)]
     fn install(env: &mut BsanEnv, args: &[String], quiet: bool) -> Result<()> {
-        env.install("cargo-bsan", ".", args)?;
-        env.install("bsan-driver", ".", args)?;
+        env.install("cargo-bsan", args)?;
+        env.install("bsan-driver", args)?;
         Self::install_llvm_pass(env)?;
         Self::install_runtime(env, args, quiet)
     }
@@ -56,7 +65,37 @@ impl Command {
     }
 
     fn test(env: &mut BsanEnv, flags: &[String], _bless: bool) -> Result<()> {
-        env.with_rust_flags(RT_FLAGS, |env| env.test("bsan-rt", flags))
+        env.with_rust_flags(RT_FLAGS, |env| env.test("bsan-rt", flags))?;
+
+        env.test("bsan-driver", flags)?;
+        env.test("cargo-bsan", flags)?;
+
+        Self::install(env, &vec![], false)?;
+
+        let sysroot = cmd!(env.sh, "cargo bsan setup --print-sysroot").output()?.stdout;
+        let sysroot = String::from_utf8(sysroot)?;
+
+        env.sh.set_var("BSAN_SYSROOT", sysroot.trim());
+
+        let cargo_home = std::env::var("CARGO_HOME")
+            .expect("Unable to resolve `CARGO_HOME` environment variable.");
+
+        let driver_binary = path!(cargo_home / "bin" / "bsan-driver");
+        if !driver_binary.exists() {
+            show_error!(
+                "Unable to locate `bsan-driver` binary in the sysroot ({:?})",
+                driver_binary.parent().unwrap()
+            );
+        }
+
+        let plugin_path = path!(env.sysroot / "lib" / BSAN_PLUGIN);
+        env.sh.set_var("BSAN_PLUGIN", plugin_path);
+        env.sh.set_var("BSAN_RT_SYSROOT", &env.sysroot);
+        env.sh.set_var("BSAN_DRIVER", driver_binary);
+
+        cmd!(env.sh, "cargo test -p bsan --test ui").run()?;
+
+        Ok(())
     }
 
     fn clippy(env: &mut BsanEnv, flags: &[String], check: bool) -> Result<()> {
@@ -121,8 +160,7 @@ impl Command {
             show_error!("Unable to locate LLVM within rust_dev artifacts ({lib_llvm:?}).")
         }
 
-        let library_name = format!("libbsan_plugin.{}", utils::dylib_suffix(&env.meta));
-        let library_path = path!(out_dir / library_name);
+        let library_path = path!(out_dir / BSAN_PLUGIN);
 
         let cmd = cmd!(
             env.sh,
@@ -142,12 +180,9 @@ impl Command {
 
     fn build_runtime(env: &mut BsanEnv, flags: &[String], quiet: bool) -> Result<PathBuf> {
         env.with_rust_flags(RT_FLAGS, |env| env.build("bsan-rt", flags, quiet))?;
-        let artifact = env.assert_artifact("libbsan_rt.a");
+        let artifact = env.assert_artifact(BSAN_RT);
         let llvm_objcopy = env.target_binary("llvm-objcopy");
-        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_*")
-            .arg(&artifact)
-            .quiet()
-            .run()?;
+        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_*").arg(&artifact).quiet().run()?;
         Ok(artifact)
     }
 

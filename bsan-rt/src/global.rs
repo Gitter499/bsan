@@ -108,9 +108,9 @@ impl Drop for GlobalCtx {
 
 // Logging for UI testing, which is enabled by the `ui_test` feature.
 macro_rules! ui_test {
-    ($ctx:expr, $($arg:tt)*) => {
+    ($($arg:tt)*) => {
         #[cfg(feature = "ui_test")]
-        crate::println!($ctx, $($arg)*);
+        crate::println!($($arg)*);
     };
 }
 pub(crate) use ui_test;
@@ -240,8 +240,10 @@ pub static GLOBAL_CTX: SyncUnsafeCell<MaybeUninit<GlobalCtx>> =
 /// `BsanHooks` to be valid.
 #[inline]
 pub unsafe fn init_global_ctx<'a>(hooks: BsanHooks) -> &'a GlobalCtx {
-    (*GLOBAL_CTX.get()).write(GlobalCtx::new(hooks));
-    global_ctx()
+    unsafe {
+        (*GLOBAL_CTX.get()).write(GlobalCtx::new(hooks));
+        global_ctx()
+    }
 }
 
 /// Deinitializes the global context object.
@@ -251,7 +253,7 @@ pub unsafe fn init_global_ctx<'a>(hooks: BsanHooks) -> &'a GlobalCtx {
 /// on the assumption that this function has not been called yet.
 #[inline]
 pub unsafe fn deinit_global_ctx() {
-    drop(ptr::replace(GLOBAL_CTX.get(), MaybeUninit::uninit()).assume_init());
+    let ctx = unsafe { ptr::replace(GLOBAL_CTX.get(), MaybeUninit::uninit()).assume_init() };
 }
 
 /// # Safety
@@ -260,11 +262,11 @@ pub unsafe fn deinit_global_ctx() {
 #[inline]
 pub unsafe fn global_ctx<'a>() -> &'a GlobalCtx {
     let ctx = GLOBAL_CTX.get();
-    &*mem::transmute::<*mut MaybeUninit<GlobalCtx>, *mut GlobalCtx>(ctx)
+    unsafe { &*mem::transmute::<*mut MaybeUninit<GlobalCtx>, *mut GlobalCtx>(ctx) }
 }
 
 unsafe extern "C" fn default_exit() -> ! {
-    libc::exit(0)
+    unsafe { libc::exit(0) }
 }
 
 pub static DEFAULT_HOOKS: BsanHooks = BsanHooks {

@@ -43,7 +43,10 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     let Some(bsan_plugin) = find_bsan_plugin(&host_sysroot) else {
         show_error!("failed to locate the BorrowSanitizer LLVM plugin (libbsan_plugin.so) within the host sysroot.");
     };
-    env::set_var("BSAN_PLUGIN", bsan_plugin);
+
+    unsafe {
+        env::set_var("BSAN_PLUGIN", bsan_plugin);
+    }
 
     if find_bsan_runtime(&host_sysroot).is_none() {
         show_error!(
@@ -52,7 +55,9 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     };
 
     if env::var_os("BSAN_RT_SYSROOT").is_none() {
-        env::set_var("BSAN_RT_SYSROOT", &host_sysroot);
+        unsafe {
+            env::set_var("BSAN_RT_SYSROOT", &host_sysroot);
+        }
     }
 
     let targets = get_arg_flag_values("--target").collect::<Vec<_>>();
