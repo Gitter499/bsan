@@ -4,8 +4,9 @@ Makefile
 CMakeCache.txt
 CMakeFiles
 .deps
-*.tar.xz
+*.tar.*
 rust_dev
 *.ll
 *.bc
 *.a
+*.o

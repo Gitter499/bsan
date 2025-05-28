@@ -106,20 +106,11 @@ impl Drop for GlobalCtx {
     fn drop(&mut self) {}
 }
 
-// General-purpose debug logging, which is only enabled in debug builds.
-macro_rules! debug {
-    ($ctx:expr, $($arg:tt)*) => {
-        #[cfg(debug_assertions)]
-        println!($ctx, $($arg)*);
-    };
-}
-pub(crate) use debug;
-
 // Logging for UI testing, which is enabled by the `ui_test` feature.
 macro_rules! ui_test {
     ($ctx:expr, $($arg:tt)*) => {
         #[cfg(feature = "ui_test")]
-        println!($ctx, $($arg)*);
+        crate::println!($ctx, $($arg)*);
     };
 }
 pub(crate) use ui_test;

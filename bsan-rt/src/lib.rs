@@ -23,10 +23,18 @@ pub use global::*;
 
 mod local;
 use libc::off_t;
+use libc_print::std_name::*;
 pub use local::*;
 
 mod block;
 mod shadow;
+
+macro_rules! println {
+    ($($arg:tt)*) => {
+        libc_print::std_name::println!($($arg)*);
+    };
+}
+pub(crate) use println;
 
 pub type MMap = unsafe extern "C" fn(*mut c_void, usize, i32, i32, i32, off_t) -> *mut c_void;
 pub type MUnmap = unsafe extern "C" fn(*mut c_void, usize) -> i32;
@@ -291,11 +299,11 @@ unsafe extern "C" fn __bsan_store_prov(prov: *const Provenance, addr: usize) {
 
 /// Pushes a shadow stack frame
 #[no_mangle]
-extern "C" fn __bsan_push_frame(span: Span) {}
+extern "C" fn __bsan_push_frame() {}
 
 /// Pops a shadow stack frame, deallocating all shadow allocations created by `bsan_alloc_stack`
 #[no_mangle]
-extern "C" fn __bsan_pop_frame(span: Span) {}
+extern "C" fn __bsan_pop_frame() {}
 
 // Registers a heap allocation of size `size`
 #[no_mangle]
