@@ -165,15 +165,7 @@ impl<T> Drop for ShadowHeap<T> {
 
 #[cfg(test)]
 mod tests {
-    use core::ffi::{c_char, c_ulonglong, c_void};
-    use core::ptr::{null, null_mut};
-    use std::println;
-
-    use libc::{self, MAP_ANONYMOUS, MAP_NORESERVE, MAP_PRIVATE, PROT_READ, PROT_WRITE};
-
-    use crate::global::{deinit_global_ctx, init_global_ctx};
     use crate::shadow::*;
-    use crate::{BsanAllocHooks, BsanHooks, Exit, Free, MMap, MUnmap, Malloc};
 
     #[derive(Default, Debug, Copy, Clone)]
     struct TestProv {
@@ -216,7 +208,6 @@ mod tests {
     #[test]
     fn smoke() {
         let heap = ShadowHeap::<TestProv>::new(&DEFAULT_HOOKS);
-
         // Create test data
         const NUM_OPERATIONS: usize = 10000;
         let test_values: Vec<TestProv> =
