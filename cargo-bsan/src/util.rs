@@ -64,8 +64,8 @@ pub fn find_bsan_plugin(sysroot: &Path) -> Option<PathBuf> {
 
 pub fn find_bsan_runtime(sysroot: &Path) -> Option<PathBuf> {
     let sysroot_var = env::var_os("BSAN_RT_SYSROOT");
-    let sysroot_dir = sysroot_var.as_ref().map(Path::new).unwrap_or(sysroot);
-    let plugin = path!(sysroot_dir / "lib" / "libbsan_rt.a");
+    let sysroot_dir = sysroot_var.as_ref().map(PathBuf::from).unwrap_or(sysroot.join("lib"));
+    let plugin = path!(sysroot_dir / "libbsan_rt.a");
     if plugin.exists() {
         Some(plugin)
     } else {
@@ -73,9 +73,9 @@ pub fn find_bsan_runtime(sysroot: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Returns the path to the `bsan` binary
+/// Returns the path to the `bsan-driver` binary
 pub fn find_bsan() -> PathBuf {
-    if let Some(path) = env::var_os("BSAN") {
+    if let Some(path) = env::var_os("BSAN_DRIVER") {
         return path.into();
     }
     // Assume it is in the same directory as ourselves.
