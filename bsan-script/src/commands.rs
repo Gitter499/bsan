@@ -36,10 +36,15 @@ impl Command {
             Command::Bin { binary_name, args } => Self::bin(&mut env, binary_name, &args),
             Command::Opt { args } => Self::opt(&mut env, &args),
             Command::Install { args, quiet } => Self::install(&mut env, &args, quiet),
+            Command::Clean => Self::clean(&mut env),
         }
     }
 
-    #[allow(dead_code)]
+    fn clean(env: &mut BsanEnv) -> Result<()> {
+        fs::remove_dir_all(&env.build_dir)?;
+        Ok(())
+    }
+
     fn install(env: &mut BsanEnv, args: &[String], quiet: bool) -> Result<()> {
         env.install("cargo-bsan", args)?;
         env.install("bsan-driver", args)?;
@@ -51,6 +56,7 @@ impl Command {
         Self::fmt(env, flags, true)?;
         Self::clippy(env, flags, true)?;
         Self::build(env, flags, quiet, false)?;
+        Self::test(env, flags, false)?;
         Self::doc(env, flags)?;
         Ok(())
     }
@@ -66,36 +72,26 @@ impl Command {
 
     fn test(env: &mut BsanEnv, flags: &[String], _bless: bool) -> Result<()> {
         env.with_rust_flags(RT_FLAGS, |env| env.test("bsan-rt", flags))?;
-
         env.test("bsan-driver", flags)?;
         env.test("cargo-bsan", flags)?;
 
-        Self::install(env, &vec![], false)?;
+        env.in_mode(Mode::Release, |env| {
+            env.build("bsan-driver", flags, true)?;
+            env.build("cargo-bsan", flags, true)?;
+            let driver = env.assert_artifact("bsan-driver");
+            let cargo_plugin = &env.assert_artifact("cargo-bsan");
+            Self::build_runtime(env, flags, true)?;
+            let llvm_plugin = Self::build_llvm_pass(env)?;
 
-        let sysroot = cmd!(env.sh, "cargo bsan setup --print-sysroot").output()?.stdout;
-        let sysroot = String::from_utf8(sysroot)?;
+            env.sh.set_var("BSAN_PLUGIN", llvm_plugin);
+            env.sh.set_var("BSAN_DRIVER", driver);
+            env.sh.set_var("BSAN_RT_SYSROOT", env.artifact_dir());
+            env.sh.set_var("BSAN_SYSROOT", path!(&env.build_dir / "sysroot"));
 
-        env.sh.set_var("BSAN_SYSROOT", sysroot.trim());
-
-        let cargo_home = std::env::var("CARGO_HOME")
-            .expect("Unable to resolve `CARGO_HOME` environment variable.");
-
-        let driver_binary = path!(cargo_home / "bin" / "bsan-driver");
-        if !driver_binary.exists() {
-            show_error!(
-                "Unable to locate `bsan-driver` binary in the sysroot ({:?})",
-                driver_binary.parent().unwrap()
-            );
-        }
-
-        let plugin_path = path!(env.sysroot / "lib" / BSAN_PLUGIN);
-        env.sh.set_var("BSAN_PLUGIN", plugin_path);
-        env.sh.set_var("BSAN_RT_SYSROOT", &env.sysroot);
-        env.sh.set_var("BSAN_DRIVER", driver_binary);
-
-        cmd!(env.sh, "cargo test -p bsan --test ui").run()?;
-
-        Ok(())
+            cmd!(env.sh, "{cargo_plugin} bsan setup").run()?;
+            cmd!(env.sh, "cargo test -p bsan --test ui").run()?;
+            Ok(())
+        })
     }
 
     fn clippy(env: &mut BsanEnv, flags: &[String], check: bool) -> Result<()> {

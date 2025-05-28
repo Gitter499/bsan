@@ -111,7 +111,7 @@ impl BsanEnv {
         target_bindir.push("bin");
 
         let build_dir = path!(root_dir / "target");
-        // Hard-cDeserializeode the target dir, since we rely on all binaries ending up in the same spot.
+        // Hard-code the target dir, since we rely on all binaries ending up in the same spot.
         sh.set_var("CARGO_TARGET_DIR", &build_dir);
 
         // Compute rustflags.

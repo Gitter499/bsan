@@ -13,6 +13,8 @@ mod utils;
 pub enum Command {
     /// Ensures that all dependencies have been installed.
     Setup,
+    /// Removes `target` directory
+    Clean,
     /// Execute all tests and build steps in CI.
     Ci {
         /// Flags that are passed through to each subcommand.

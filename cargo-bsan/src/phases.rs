@@ -43,7 +43,6 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     let Some(bsan_plugin) = find_bsan_plugin(&host_sysroot) else {
         show_error!("failed to locate the BorrowSanitizer LLVM plugin (libbsan_plugin.so) within the host sysroot.");
     };
-
     unsafe {
         env::set_var("BSAN_PLUGIN", bsan_plugin);
     }
@@ -143,7 +142,6 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
 }
 
 pub fn phase_rustc(args: impl Iterator<Item = String>, phase: RustcPhase) {
-    eprintln!("IN_RUSTC_PHASE");
     /// Determines if we are being invoked (as rustc) to build a crate for
     /// the "target" architecture, in contrast to the "host" architecture.
     /// Host crates are for build scripts and proc macros and still need to
