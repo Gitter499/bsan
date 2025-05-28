@@ -1,10 +1,12 @@
 use std::env;
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::OnceLock;
 
 use colored::*;
 use regex::bytes::Regex;
+use rustc_version::VersionMeta;
 use ui_test::color_eyre::eyre::{Context, Result};
 use ui_test::custom_flags::edition::Edition;
 use ui_test::dependencies::DependencyBuilder;
@@ -18,10 +20,6 @@ enum Mode {
     /// Requires annotations
     Fail,
     Panic,
-}
-
-fn bsan_path() -> PathBuf {
-    PathBuf::from(env::var("BSAN").unwrap_or_else(|_| env!("CARGO_BIN_EXE_bsan-driver").into()))
 }
 
 #[allow(dead_code)]
@@ -87,16 +85,23 @@ regexes! {
     r"[^ ]*/\.?cargo/registry/.*/(.*\.rs)"  => "CARGO_REGISTRY/.../$1",
 }
 
+fn bsan_path() -> PathBuf {
+    let driver = env::var("BSAN_DRIVER").expect("BSAN_DRIVER must be set to run the ui test suite");
+    println!("{:?}", driver);
+    PathBuf::from(driver)
+}
+
 /// Does *not* set any args or env vars, since it is shared between the test runner and
 /// run_dep_mode.
-fn bsan_config(path: &str, target: &str, mode: Mode, with_dependencies: bool) -> Config {
+fn bsan_config(path: &str, meta: &VersionMeta, mode: Mode, with_dependencies: bool) -> Config {
     // BSAN is rustc-like, so we create a default builder for rustc and modify it
     let mut program = CommandBuilder::rustc();
     program.program = bsan_path();
 
     let mut config = Config {
-        target: Some(target.to_owned()),
         program,
+        host: Some(meta.host.clone()),
+        target: Some(meta.host.clone()),
         out_dir: PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("bsan_ui"),
         threads: std::env::var("BSAN_TEST_THREADS")
             .ok()
@@ -127,7 +132,7 @@ fn bsan_config(path: &str, target: &str, mode: Mode, with_dependencies: bool) ->
             "dependencies",
             DependencyBuilder {
                 program: CommandBuilder {
-                    // Set the `cargo-bsan` binary, which we expect to be in the same folder as the `bsan` binary.
+                    // Set the `cargo-bsan` binary, which we expect to be in the same folder as the `bsan-driver` binary.
                     // (It's a separate crate, so we don't get an env var from cargo.)
                     program: bsan_path()
                         .with_file_name(format!("cargo-bsan{}", env::consts::EXE_SUFFIX)),
@@ -148,12 +153,11 @@ fn bsan_config(path: &str, target: &str, mode: Mode, with_dependencies: bool) ->
 fn run_tests(
     mode: Mode,
     path: &str,
-    target: &str,
+    meta: &VersionMeta,
     with_dependencies: bool,
     tmpdir: &Path,
 ) -> Result<()> {
-    let mut config = bsan_config(path, target, mode, with_dependencies);
-
+    let mut config = bsan_config(path, meta, mode, with_dependencies);
     // Add a test env var to do environment communication tests.
     config.program.envs.push(("BSAN_ENV_VAR_TEST".into(), Some("0".into())));
     // Let the tests know where to store temp files (they might run for a different target, which can make this hard to find).
@@ -210,16 +214,16 @@ fn run_tests(
     )
 }
 
-fn get_target() -> String {
-    rustc_version::VersionMeta::for_command(std::process::Command::new(bsan_path()))
-        .expect("failed to parse rustc version info")
-        .host
+fn get_version_info() -> VersionMeta {
+    let mut cmd = Command::new(bsan_path());
+    cmd.env("BSAN_BE_RUSTC", "host");
+    VersionMeta::for_command(cmd).expect("Failed to parse rustc version info")
 }
 
 fn ui(
     mode: Mode,
     path: &str,
-    target: &str,
+    meta: &VersionMeta,
     with_dependencies: Dependencies,
     tmpdir: &Path,
 ) -> Result<()> {
@@ -230,18 +234,19 @@ fn ui(
         WithDependencies => true,
         WithoutDependencies => false,
     };
-    run_tests(mode, path, target, with_dependencies, tmpdir)
+    run_tests(mode, path, meta, with_dependencies, tmpdir)
         .with_context(|| format!("ui tests in {path} failed"))
 }
 
 fn main() -> Result<()> {
     ui_test::color_eyre::install()?;
-    let target = get_target();
+    let meta = get_version_info();
+
     let tmpdir = tempfile::Builder::new().prefix("bsan-uitest-").tempdir()?;
-    ui(Mode::Pass, "tests/pass", &target, WithoutDependencies, tmpdir.path())?;
-    ui(Mode::Pass, "tests/pass-dep", &target, WithDependencies, tmpdir.path())?;
-    ui(Mode::Panic, "tests/panic", &target, WithDependencies, tmpdir.path())?;
-    ui(Mode::Fail, "tests/fail", &target, WithoutDependencies, tmpdir.path())?;
-    ui(Mode::Fail, "tests/fail-dep", &target, WithDependencies, tmpdir.path())?;
+    ui(Mode::Pass, "tests/pass", &meta, WithoutDependencies, tmpdir.path())?;
+    ui(Mode::Pass, "tests/pass-dep", &meta, WithDependencies, tmpdir.path())?;
+    ui(Mode::Panic, "tests/panic", &meta, WithDependencies, tmpdir.path())?;
+    ui(Mode::Fail, "tests/fail", &meta, WithoutDependencies, tmpdir.path())?;
+    ui(Mode::Fail, "tests/fail-dep", &meta, WithDependencies, tmpdir.path())?;
     Ok(())
 }

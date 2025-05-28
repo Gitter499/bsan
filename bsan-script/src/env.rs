@@ -110,7 +110,7 @@ impl BsanEnv {
         assert!(target_bindir.pop());
         target_bindir.push("bin");
 
-        let build_dir = path!(root_dir / "build");
+        let build_dir = path!(root_dir / "target");
         // Hard-cDeserializeode the target dir, since we rely on all binaries ending up in the same spot.
         sh.set_var("CARGO_TARGET_DIR", &build_dir);
 
@@ -314,13 +314,10 @@ impl BsanEnv {
     pub fn install(
         &self,
         crate_dir: impl AsRef<OsStr>,
-        _install_dir: impl AsRef<OsStr>,
         args: impl IntoIterator<Item = impl AsRef<OsStr>>,
     ) -> Result<()> {
         let BsanEnv { cargo_extra_flags, .. } = self;
         let path = path!(self.root_dir / crate_dir.as_ref());
-        // Install binaries to the miri toolchain's `sysroot` so they do not interact with other toolchains.
-        // (Not using `cargo_cmd` as `install` is special and doesn't use `--manifest-path`.)
         cmd!(self.sh, "cargo +bsan install {cargo_extra_flags...} --path {path} --force {args...}")
             .run()?;
         Ok(())

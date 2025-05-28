@@ -23,8 +23,10 @@ pub static LOCAL_CTX: UnsafeCell<MaybeUninit<LocalCtx>> = UnsafeCell::new(MaybeU
 /// This function should only be called once, when a thread is initialized.
 #[inline]
 pub unsafe fn init_local_ctx(ctx: &GlobalCtx) -> &LocalCtx {
-    (*LOCAL_CTX.get()).write(LocalCtx::new(ctx));
-    local_ctx_mut()
+    unsafe {
+        (*LOCAL_CTX.get()).write(LocalCtx::new(ctx));
+        local_ctx_mut()
+    }
 }
 
 /// Deinitializes the local context object.
@@ -36,7 +38,7 @@ pub unsafe fn init_local_ctx(ctx: &GlobalCtx) -> &LocalCtx {
 /// on the assumption that the current thread remains initialized.
 #[inline]
 pub unsafe fn deinit_local_ctx() {
-    drop(ptr::replace(LOCAL_CTX.get(), MaybeUninit::uninit()).assume_init());
+    let ctx = unsafe { ptr::replace(LOCAL_CTX.get(), MaybeUninit::uninit()).assume_init() };
 }
 
 /// # Safety
@@ -44,7 +46,7 @@ pub unsafe fn deinit_local_ctx() {
 #[inline]
 pub unsafe fn local_ctx<'a>() -> &'a LocalCtx {
     let ctx = LOCAL_CTX.get();
-    &*local_ctx_mut()
+    unsafe { &*local_ctx_mut() }
 }
 
 /// # Safety
@@ -52,7 +54,7 @@ pub unsafe fn local_ctx<'a>() -> &'a LocalCtx {
 #[inline]
 pub unsafe fn local_ctx_mut<'a>() -> &'a mut LocalCtx {
     let ctx = LOCAL_CTX.get();
-    &mut *mem::transmute::<*mut MaybeUninit<LocalCtx>, *mut LocalCtx>(ctx)
+    unsafe { &mut *mem::transmute::<*mut MaybeUninit<LocalCtx>, *mut LocalCtx>(ctx) }
 }
 
 impl Drop for LocalCtx {

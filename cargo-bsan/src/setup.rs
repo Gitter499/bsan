@@ -27,11 +27,9 @@ pub fn setup_sysroot(
     let print_sysroot = only_setup && has_arg_flag("--print-sysroot"); // whether we just print the sysroot path
     let show_setup = only_setup && !print_sysroot;
 
-    if !only_setup {
-        if let Some(sysroot) = std::env::var_os("BSAN_SYSROOT") {
-            // Skip setup step if BSAN_SYSROOT is explicitly set, *unless* we are `cargo bsan setup`.
-            return sysroot.into();
-        }
+    if !only_setup && let Some(sysroot) = std::env::var_os("BSAN_SYSROOT") {
+        // Skip setup step if BSAN_SYSROOT is explicitly set, *unless* we are `cargo bsan setup`.
+        return sysroot.into();
     }
 
     // Determine where the rust sources are located.  The env var trumps auto-detection.
@@ -115,7 +113,7 @@ pub fn setup_sysroot(
         }
 
         command.env("BSAN_CALLED_FROM_SETUP", "1");
-        // Miri expects `BSAN_SYSROOT` to be set when invoked in target mode. Even if that directory is empty.
+        // BSAN expects `BSAN_SYSROOT` to be set when invoked in target mode. Even if that directory is empty.
         command.env("BSAN_SYSROOT", &sysroot_dir);
         // Make sure there are no other wrappers getting in our way (Cc
         // https://github.com/rust-lang/miri/issues/1421,
