@@ -231,12 +231,8 @@ impl BsanEnv {
         }
     }
 
-    pub fn fmt(&self, args: &[String], check: bool) -> Result<()> {
-        let mut cmd = self.cargo_cmd_base("fmt").args(args);
-        if check && !args.iter().any(|s| s.as_str() == "--check") {
-            cmd = cmd.arg("--check");
-        };
-        cmd.run()?;
+    pub fn fmt(&self, args: &[String]) -> Result<()> {
+        self.cargo_cmd_base("fmt").args(args).run()?;
         Ok(())
     }
 
