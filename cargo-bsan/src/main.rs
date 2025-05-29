@@ -77,7 +77,7 @@ fn main() {
         },
         arg if arg == env::var("RUSTC").unwrap_or_else(|_| {
             show_error!(
-                "`cargo-miri` called without RUSTC set; please only invoke this binary through `cargo miri`"
+                "`cargo-bsan` called without RUSTC set; please only invoke this binary through `cargo bsan`"
             )
         }) => {
             // If the first arg is equal to the RUSTC env variable (which should be set at this

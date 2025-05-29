@@ -1,7 +1,7 @@
 [package]
 name = "bsan-driver"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 env_logger = "0.11.6"
@@ -12,13 +12,6 @@ rustc_version = "0.4.1"
 test = true     # we have unit tests
 doctest = false # but no doc tests
 
-[dev-dependencies]
-colored = "2"
-ui_test = "0.26.5"
-rustc_version = "0.4"
-regex = "1.5.5"
-tempfile = "3"
-
 [[bin]]
 name = "bsan-driver"
 test = false    # we have no unit tests
@@ -26,7 +19,3 @@ doctest = false # and no doc tests
 
 [package.metadata.rust-analyzer]
 rustc_private = true
-
-[[test]]
-name = "ui"
-harness = false

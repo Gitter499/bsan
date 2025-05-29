@@ -33,6 +33,5 @@ jobs:
     - name: Install Dependencies
       run: |
         rustup default nightly
-        cargo install rustup-toolchain-install-master
     - name: CI
       run: ./xb ci

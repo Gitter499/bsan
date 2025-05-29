@@ -38,16 +38,32 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         panic!("failed to determine underlying rustc version of BSAN ({:?}):\n{err:?}", bsan())
     });
 
-    let Some(bsan_plugin) = find_bsan_plugin(verbose) else {
-        show_error!("failed to locate the BorrowSanitizer LLVM plugin within the host sysroot.");
+    let host_sysroot = get_host_sysroot_dir(verbose);
+
+    let Some(bsan_plugin) = find_bsan_plugin(&host_sysroot) else {
+        show_error!("failed to locate the BorrowSanitizer LLVM plugin (libbsan_plugin.so) within the host sysroot.");
     };
-    env::set_var("BSAN_PLUGIN", bsan_plugin);
+    unsafe {
+        env::set_var("BSAN_PLUGIN", bsan_plugin);
+    }
+
+    if find_bsan_runtime(&host_sysroot).is_none() {
+        show_error!(
+            "failed to locate the BorrowSanitizer runtime (libbsan_rt.a) within the host sysroot."
+        );
+    };
+
+    if env::var_os("BSAN_RT_SYSROOT").is_none() {
+        unsafe {
+            env::set_var("BSAN_RT_SYSROOT", &host_sysroot);
+        }
+    }
 
     let targets = get_arg_flag_values("--target").collect::<Vec<_>>();
 
     // We only allow specifying the host as a target.
     if targets.len() > 1 || targets.iter().any(|t| t != &rustc_version.host) {
-        show_error!("Cross-compilation is not supported at this time.");
+        show_error!("Cross-compilation is not supported.");
     }
 
     // If cleaning the target directory & sysroot cache,
@@ -118,10 +134,6 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
     cmd.env("BSAN_SYSROOT", bsan_sysroot);
     if verbose > 0 {
         cmd.env("BSAN_VERBOSE", verbose.to_string()); // This makes the other phases verbose.
-    }
-
-    if env::var_os("BSAN_RT_SYSROOT").is_none() {
-        cmd.env("BSAN_RT_SYSROOT", get_host_sysroot_dir(verbose));
     }
 
     // Run cargo.

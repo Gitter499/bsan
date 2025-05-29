@@ -20,7 +20,7 @@ pub fn is_running_on_ci() -> bool {
     std::env::var("GITHUB_ACTIONS").is_ok_and(|e| e == "true")
 }
 
-pub fn root_dir() -> std::io::Result<PathBuf> {
+pub fn root_dir() -> Result<PathBuf> {
     const BSAN_SCRIPT_ROOT_DIR: &str = env!("CARGO_MANIFEST_DIR");
     Ok(canonicalize(BSAN_SCRIPT_ROOT_DIR)?.parent().unwrap().into())
 }
