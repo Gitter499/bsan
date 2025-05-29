@@ -137,6 +137,7 @@ dependencies = [
 name = "bsan-rt"
 version = "0.1.0"
 dependencies = [
+ "bsan-shared",
  "hashbrown",
  "libc",
  "libc-print",
@@ -162,6 +163,10 @@ dependencies = [
  "xshell",
  "xz2",
 ]
+
+[[package]]
+name = "bsan-shared"
+version = "0.1.0"
 
 [[package]]
 name = "bstr"
