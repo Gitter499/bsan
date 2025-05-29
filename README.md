@@ -2,9 +2,12 @@
 
 # <a href="https://borrowsanitizer.com"><img height="60px" src="https://borrowsanitizer.com/images/bsan.svg" alt="BorrowSanitizer" /></a> <a href="https://github.com/verus-lang/verus"><picture><source media="(prefers-color-scheme: dark)" height="60px" height="60px" srcset="https://borrowsanitizer.com/images/bsan-text-dark.svg"/><img height="60px" height="60px" src="https://borrowsanitizer.com/images/bsan-text-light.svg" alt="BorrowSanitizer" /></picture></a>
 
-BorrowSanitizer is work-in-progress LLVM instrumentation pass for detecting aliasing violations in multi-language Rust applications.
+BorrowSanitizer is work-in-progress LLVM instrumentation pass for detecting aliasing violations in multi-language Rust applications. Our project is still in early stages, but our goal is to support detecting the following types of errors:
+* Violations of Rust's [*Tree Borrows*](https://perso.crans.org/vanille/treebor/) aliasing model.
+* Accesses out-of-bounds
+* Use-after free errors.
 
-#### 🚧 This is an unstable research prototype 🚧 
+For more information, check out [our website](https://borrowsanitizer.com).
 
 ---
 BorrowSanitizer is dual-licensed under [Apache](https://github.com/BorrowSanitizer/bsan/blob/main/LICENSE-APACHE) and [MIT](https://github.com/BorrowSanitizer/bsan/blob/main/LICENSE-MIT), following the Rust project.
