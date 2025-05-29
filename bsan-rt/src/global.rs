@@ -14,6 +14,7 @@ use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
 use block::*;
 use hashbrown::{DefaultHashBuilder, HashMap};
+use libc_print::std_name::*;
 use rustc_hash::FxBuildHasher;
 
 use crate::shadow::ShadowHeap;
@@ -44,7 +45,7 @@ impl GlobalCtx {
     /// This function will also initialize our shadow heap
     fn new(hooks: BsanHooks) -> Self {
         Self {
-            hooks: hooks.clone(),
+            hooks,
             next_alloc_id: AtomicUsize::new(AllocId::min().get()),
             next_thread_id: AtomicUsize::new(0),
             shadow_heap: ShadowHeap::new(&hooks),
@@ -99,58 +100,17 @@ impl GlobalCtx {
         let id = self.next_alloc_id.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         AllocId::new(id)
     }
-    /// Prints a given set of formatted arguments. This function is not meant
-    /// to be called directly; instead, it should be used with the `print!`,
-    /// `println!`, and `ui_test!` macros.
-    pub fn print(&self, args: fmt::Arguments<'_>) {
-        let mut buffer = BVec::new(self);
-        let _ = write!(&mut buffer, "{args}");
-        unsafe {
-            // On ARM linux, c_char is an alias for u8
-            #[allow(clippy::useless_transmute)]
-            let buffer = mem::transmute::<*const u8, *const c_char>(buffer.as_ptr());
-            (self.hooks.print)(buffer);
-        }
-    }
 }
 
 impl Drop for GlobalCtx {
     fn drop(&mut self) {}
 }
 
-/// Prints to stdout.
-macro_rules! print {
-    ($ctx:expr, $($arg:tt)*) => {{
-        $ctx.print(core::format_args!($($arg)*));
-    }};
-}
-pub(crate) use print;
-
-/// Prints to stdout, appending a newline.
-macro_rules! println {
-    ($ctx:expr) => {
-        $crate::print!($ctx, "\n")
-    };
-    ($ctx:expr, $($arg:tt)*) => {{
-        $ctx.print(core::format_args_nl!($($arg)*));
-    }};
-}
-pub(crate) use println;
-
-// General-purpose debug logging, which is only enabled in debug builds.
-macro_rules! debug {
-    ($ctx:expr, $($arg:tt)*) => {
-        #[cfg(debug_assertions)]
-        $crate::println!($ctx, $($arg)*);
-    };
-}
-pub(crate) use debug;
-
 // Logging for UI testing, which is enabled by the `ui_test` feature.
 macro_rules! ui_test {
-    ($ctx:expr, $($arg:tt)*) => {
+    ($($arg:tt)*) => {
         #[cfg(feature = "ui_test")]
-        $crate::println!($ctx, $($arg)*);
+        crate::println!($($arg)*);
     };
 }
 pub(crate) use ui_test;
@@ -280,8 +240,10 @@ pub static GLOBAL_CTX: SyncUnsafeCell<MaybeUninit<GlobalCtx>> =
 /// `BsanHooks` to be valid.
 #[inline]
 pub unsafe fn init_global_ctx<'a>(hooks: BsanHooks) -> &'a GlobalCtx {
-    (*GLOBAL_CTX.get()).write(GlobalCtx::new(hooks));
-    global_ctx()
+    unsafe {
+        (*GLOBAL_CTX.get()).write(GlobalCtx::new(hooks));
+        global_ctx()
+    }
 }
 
 /// Deinitializes the global context object.
@@ -291,7 +253,7 @@ pub unsafe fn init_global_ctx<'a>(hooks: BsanHooks) -> &'a GlobalCtx {
 /// on the assumption that this function has not been called yet.
 #[inline]
 pub unsafe fn deinit_global_ctx() {
-    drop(ptr::replace(GLOBAL_CTX.get(), MaybeUninit::uninit()).assume_init());
+    let ctx = unsafe { ptr::replace(GLOBAL_CTX.get(), MaybeUninit::uninit()).assume_init() };
 }
 
 /// # Safety
@@ -300,40 +262,16 @@ pub unsafe fn deinit_global_ctx() {
 #[inline]
 pub unsafe fn global_ctx<'a>() -> &'a GlobalCtx {
     let ctx = GLOBAL_CTX.get();
-    &*mem::transmute::<*mut MaybeUninit<GlobalCtx>, *mut GlobalCtx>(ctx)
+    unsafe { &*mem::transmute::<*mut MaybeUninit<GlobalCtx>, *mut GlobalCtx>(ctx) }
 }
 
-#[cfg(test)]
-pub mod test {
-    use crate::*;
-
-    unsafe extern "C" fn test_print(ptr: *const c_char) {
-        std::println!("{}", std::ffi::CStr::from_ptr(ptr).to_str().expect("Invalid UTF-8"));
-    }
-
-    unsafe extern "C" fn test_exit() -> ! {
-        std::process::exit(0);
-    }
-
-    unsafe extern "C" fn test_mmap(
-        addr: *mut c_void,
-        len: usize,
-        prot: i32,
-        flags: i32,
-        fd: i32,
-        offset: u64,
-    ) -> *mut c_void {
-        // LLVM's sanitizer API uses u64 for OFF_T, but libc uses i64
-        // We use this wrapper function to avoid having to manually update
-        // the bindings.
-        libc::mmap(addr, len, prot, flags, fd, offset as i64)
-    }
-
-    pub static TEST_HOOKS: BsanHooks = BsanHooks {
-        alloc: BsanAllocHooks { malloc: libc::malloc, free: libc::free },
-        mmap: test_mmap,
-        munmap: libc::munmap,
-        print: test_print,
-        exit: test_exit,
-    };
+unsafe extern "C" fn default_exit() -> ! {
+    unsafe { libc::exit(0) }
 }
+
+pub static DEFAULT_HOOKS: BsanHooks = BsanHooks {
+    alloc: BsanAllocHooks { malloc: libc::malloc, free: libc::free },
+    mmap: libc::mmap,
+    munmap: libc::munmap,
+    exit: default_exit,
+};

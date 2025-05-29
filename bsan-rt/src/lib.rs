@@ -22,25 +22,32 @@ mod global;
 pub use global::*;
 
 mod local;
+use libc::off_t;
+use libc_print::std_name::*;
 pub use local::*;
 
 mod block;
 mod shadow;
 
-pub type MMap = unsafe extern "C" fn(*mut c_void, usize, i32, i32, i32, c_ulonglong) -> *mut c_void;
+macro_rules! println {
+    ($($arg:tt)*) => {
+        libc_print::std_name::println!($($arg)*);
+    };
+}
+pub(crate) use println;
+
+pub type MMap = unsafe extern "C" fn(*mut c_void, usize, i32, i32, i32, off_t) -> *mut c_void;
 pub type MUnmap = unsafe extern "C" fn(*mut c_void, usize) -> i32;
 pub type Malloc = unsafe extern "C" fn(usize) -> *mut c_void;
 pub type Free = unsafe extern "C" fn(*mut c_void);
-pub type Print = unsafe extern "C" fn(*const c_char);
 pub type Exit = unsafe extern "C" fn() -> !;
 
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct BsanHooks {
     alloc: BsanAllocHooks,
     mmap: MMap,
     munmap: MUnmap,
-    print: Print,
     exit: Exit,
 }
 
@@ -69,8 +76,10 @@ unsafe impl Allocator for BsanAllocHooks {
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, _layout: Layout) {
-        let ptr = mem::transmute::<*mut u8, *mut libc::c_void>(ptr.as_ptr());
-        (self.free)(ptr);
+        unsafe {
+            let ptr = mem::transmute::<*mut u8, *mut libc::c_void>(ptr.as_ptr());
+            (self.free)(ptr);
+        }
     }
 }
 
@@ -224,104 +233,109 @@ impl AllocInfo {
 /// The safety of this library is entirely dependent on this
 /// function having been executed. We assume the global invariant that
 /// no other API functions will be called prior to that point.
-#[no_mangle]
-unsafe extern "C" fn bsan_init(hooks: BsanHooks) {
-    let ctx = init_global_ctx(hooks);
-    let ctx = unsafe { ctx };
-    init_local_ctx(ctx);
-    ui_test!(ctx, "bsan_init");
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_init() {
+    unsafe {
+        let ctx = init_global_ctx(global::DEFAULT_HOOKS);
+        init_local_ctx(ctx);
+    }
+    ui_test!("bsan_init");
 }
 
 /// Deinitializes the global state of the runtime library.
 /// We assume the global invariant that no other API functions
 /// will be called after this function has executed.
-#[no_mangle]
-unsafe extern "C" fn bsan_deinit() {
-    let global_ctx = unsafe { global_ctx() };
-    ui_test!(global_ctx, "bsan_deinit");
-    deinit_local_ctx();
-    deinit_global_ctx();
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_deinit() {
+    ui_test!("bsan_deinit");
+    unsafe {
+        deinit_local_ctx();
+        deinit_global_ctx();
+    }
 }
 
 /// Creates a new borrow tag for the given provenance object.
-#[no_mangle]
-extern "C" fn bsan_retag(span: Span, prov: *mut Provenance, retag_kind: u8, place_kind: u8) {}
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_retag(prov: *mut Provenance, retag_kind: u8, place_kind: u8) {}
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
-#[no_mangle]
-extern "C" fn bsan_read(span: Span, prov: *const Provenance, addr: usize, access_size: u64) {}
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_read(prov: *const Provenance, addr: usize, access_size: u64) {}
 
 /// Records a write access of size `access_size` at the given address `addr` using the provenance `prov`.
-#[no_mangle]
-extern "C" fn bsan_write(span: Span, prov: *const Provenance, addr: usize, access_size: u64) {}
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_write(prov: *const Provenance, addr: usize, access_size: u64) {}
 
 /// Copies the provenance stored in the range `[src_addr, src_addr + access_size)` within the shadow heap
 /// to the address `dst_addr`. This function will silently fail, so it should only be called in conjunction with
 /// `bsan_read` and `bsan_write` or as part of an interceptor.
-#[no_mangle]
-extern "C" fn bsan_shadow_copy(dst_addr: usize, src_addr: usize, access_size: usize) {}
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_shadow_copy(dst_addr: usize, src_addr: usize, access_size: usize) {}
 
 /// Clears the provenance stored in the range `[dst_addr, dst_addr + access_size)` within the
 /// shadow heap. This function will silently fail, so it should only be called in conjunction with
 /// `bsan_read` and `bsan_write` or as part of an interceptor.
-#[no_mangle]
-extern "C" fn bsan_shadow_clear(addr: usize, access_size: usize) {}
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_shadow_clear(addr: usize, access_size: usize) {}
 
 /// Loads the provenance of a given address from shadow memory and stores
 /// the result in the return pointer.
-#[no_mangle]
-unsafe extern "C" fn bsan_load_prov(prov: *mut Provenance, addr: usize) {
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_load_prov(prov: *mut Provenance, addr: usize) {
     debug_assert!(!prov.is_null());
-
-    let ctx = global_ctx();
+    let ctx = unsafe { global_ctx() };
     let heap = ctx.shadow_heap();
 
-    *prov = heap.load_prov(addr);
+    unsafe {
+        *prov = heap.load_prov(addr);
+    }
 }
 
 /// Stores the given provenance value into shadow memory at the location for the given address.
-#[no_mangle]
-unsafe extern "C" fn bsan_store_prov(prov: *const Provenance, addr: usize) {
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_store_prov(prov: *const Provenance, addr: usize) {
     debug_assert!(!prov.is_null());
 
-    let ctx = global_ctx();
+    let ctx = unsafe { global_ctx() };
     let heap = ctx.shadow_heap();
 
     heap.store_prov(ctx.hooks(), prov, addr);
 }
 
 /// Pushes a shadow stack frame
-#[no_mangle]
-extern "C" fn bsan_push_frame(span: Span) {}
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_push_frame() {}
 
 /// Pops a shadow stack frame, deallocating all shadow allocations created by `bsan_alloc_stack`
-#[no_mangle]
-extern "C" fn bsan_pop_frame(span: Span) {}
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_pop_frame() {}
 
 // Registers a heap allocation of size `size`
-#[no_mangle]
-extern "C" fn bsan_alloc(span: Span, prov: *mut MaybeUninit<Provenance>, addr: usize, size: usize) {
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_alloc(prov: *mut MaybeUninit<Provenance>, addr: usize, size: usize) {
+    debug_assert!(!prov.is_null());
     unsafe {
         (*prov).write(Provenance::null());
     }
 }
 
 /// Registers a stack allocation of size `size`.
-#[no_mangle]
-extern "C" fn bsan_alloc_stack(span: Span, prov: *mut MaybeUninit<Provenance>, size: usize) {
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_alloc_stack(prov: *mut MaybeUninit<Provenance>, size: usize) {
+    debug_assert!(!prov.is_null());
     unsafe {
         (*prov).write(Provenance::null());
     }
 }
 
 /// Deregisters a heap allocation
-#[no_mangle]
-extern "C" fn bsan_dealloc(span: Span, prov: *mut Provenance) {}
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_dealloc(prov: *mut Provenance) {}
 
 /// Marks the borrow tag for `prov` as "exposed," allowing it to be resolved to
 /// validate accesses through "wildcard" pointers.
-#[no_mangle]
-extern "C" fn bsan_expose_tag(prov: *const Provenance) {}
+#[unsafe(no_mangle)]
+extern "C" fn __bsan_expose_tag(prov: *const Provenance) {}
 
 #[cfg(not(test))]
 #[panic_handler]

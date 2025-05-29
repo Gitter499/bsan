@@ -190,13 +190,13 @@ pub fn toolchain(sh: &Shell, config: &BsanConfig) -> Result<VersionMeta> {
 
     let new_commit = &config.toolchain;
 
-    if let Ok(meta) = version_meta(sh, "bsan") {
-        if Some(new_commit) == meta.commit_hash.as_ref() {
-            if active_toolchain()? != "bsan" {
-                cmd!(sh, "rustup override set bsan").run()?;
-            }
-            return Ok(meta);
+    if let Ok(meta) = version_meta(sh, "bsan")
+        && Some(new_commit) == meta.commit_hash.as_ref()
+    {
+        if active_toolchain()? != "bsan" {
+            cmd!(sh, "rustup override set bsan").run()?;
         }
+        return Ok(meta);
     }
 
     let components = &config.components;

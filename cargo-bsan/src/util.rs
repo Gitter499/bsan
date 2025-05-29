@@ -51,10 +51,9 @@ pub fn cargo() -> Command {
     Command::new(env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")))
 }
 
-pub fn find_bsan_plugin(verbose: usize) -> Option<PathBuf> {
+pub fn find_bsan_plugin(sysroot: &Path) -> Option<PathBuf> {
     env::var_os("BSAN_PLUGIN").map(|o| o.into()).or_else(|| {
-        let sysroot = get_host_sysroot_dir(verbose);
-        let plugin = path!(sysroot / "lib" / "libbsan.so");
+        let plugin = path!(sysroot / "lib" / "libbsan_plugin.so");
         if plugin.exists() {
             Some(plugin)
         } else {
@@ -63,9 +62,20 @@ pub fn find_bsan_plugin(verbose: usize) -> Option<PathBuf> {
     })
 }
 
-/// Returns the path to the `bsan` binary
+pub fn find_bsan_runtime(sysroot: &Path) -> Option<PathBuf> {
+    let sysroot_var = env::var_os("BSAN_RT_SYSROOT");
+    let sysroot_dir = sysroot_var.as_ref().map(PathBuf::from).unwrap_or(sysroot.join("lib"));
+    let plugin = path!(sysroot_dir / "libbsan_rt.a");
+    if plugin.exists() {
+        Some(plugin)
+    } else {
+        None
+    }
+}
+
+/// Returns the path to the `bsan-driver` binary
 pub fn find_bsan() -> PathBuf {
-    if let Some(path) = env::var_os("BSAN") {
+    if let Some(path) = env::var_os("BSAN_DRIVER") {
         return path.into();
     }
     // Assume it is in the same directory as ourselves.
