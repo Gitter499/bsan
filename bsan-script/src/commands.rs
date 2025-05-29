@@ -1,43 +1,82 @@
 use std::fs;
+use std::ops::Deref;
+use std::path::PathBuf;
 
 use anyhow::Result;
+use clap::ValueEnum;
 use path_macro::path;
 use xshell::cmd;
 
 use crate::env::{BsanEnv, Mode};
-use crate::utils::show_error;
-use crate::*;
-
-static BSAN_RT: &str = "libbsan_rt.a";
-
-#[cfg(target_os = "macos")]
-static BSAN_PLUGIN: &str = "libbsan_plugin.dylib";
-
-#[cfg(target_os = "linux")]
-static BSAN_PLUGIN: &str = "libbsan_plugin.so";
-
-static RT_FLAGS: &[&str] =
-    &["-Cpanic=abort", "-Zpanic_abort_tests", "-Cembed-bitcode=yes", "-Clto"];
+use crate::utils::{self, show_error};
+use crate::Command;
 
 impl Command {
     pub fn exec(self) -> Result<()> {
         let mut env = BsanEnv::new()?;
+        let env = &mut env;
         match self {
             Command::Setup => Ok(()),
-            Command::Build { flags, quiet, release } => {
-                Self::build(&mut env, &flags, quiet, release)
+            Command::Clean => Self::clean(env),
+            Command::Ci { args } => Self::ci(env, &args),
+            Command::Doc { components, args } => components.iter().try_for_each(|c| {
+                c.doc(env, &args)?;
+                Ok(())
+            }),
+            Command::Bin { binary_name, args } => Self::bin(env, binary_name, &args),
+            Command::Opt { args } => Self::opt(env, &args),
+            Command::Fmt { args } => Self::fmt(env, &args),
+            Command::Build { components, args } => components.iter().try_for_each(|c| {
+                c.build(env, &args)?;
+                Ok(())
+            }),
+            Command::Check { components, args } => components.iter().try_for_each(|c| {
+                c.check(env, &args)?;
+                Ok(())
+            }),
+            Command::Clippy { components, args } => {
+                components.iter().try_for_each(|c| c.clippy(env, &args))
             }
-            Command::Check { flags } => Self::check(&mut env, &flags),
-            Command::Clippy { flags, check } => Self::clippy(&mut env, &flags, check),
-            Command::Test { bless, flags } => Self::test(&mut env, &flags, bless),
-            Command::Fmt { flags, check } => Self::fmt(&env, &flags, check),
-            Command::Doc { flags } => Self::doc(&mut env, &flags),
-            Command::Ci { flags, quiet } => Self::ci(&mut env, &flags, quiet),
-            Command::Bin { binary_name, args } => Self::bin(&mut env, binary_name, &args),
-            Command::Opt { args } => Self::opt(&mut env, &args),
-            Command::Install { args, quiet } => Self::install(&mut env, &args, quiet),
-            Command::Clean => Self::clean(&mut env),
+            Command::Test { components, args } => {
+                components.iter().try_for_each(|c| c.test(env, &args))
+            }
+            Command::Install { components, args } => {
+                components.iter().try_for_each(|c| c.install(env, &args))
+            }
+            Command::UI { bless } => Self::ui(env, bless),
         }
+    }
+
+    fn fmt(env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.fmt(args)
+    }
+
+    fn ui(env: &mut BsanEnv, _bless: bool) -> Result<()> {
+        env.in_mode(Mode::Release, |env| {
+            let driver = BsanDriver.build(env, &[])?;
+            let cargo_bsan = CargoBsan.build(env, &[])?;
+            let bsan_rt = BsanRuntime.build(env, &[])?;
+            let plugin = BsanLLVMPlugin.build(env, &[])?;
+
+            env.sh.set_var("BSAN_PLUGIN", plugin);
+            env.sh.set_var("BSAN_DRIVER", driver);
+            env.sh.set_var("BSAN_RT_SYSROOT", bsan_rt.parent().unwrap());
+            env.sh.set_var("BSAN_SYSROOT", path!(&env.build_dir / "sysroot"));
+
+            cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
+            cmd!(env.sh, "cargo test -p bsan --test ui").run()?;
+            Ok(())
+        })
+    }
+
+    fn ci(env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        let components = crate::all_components!();
+        // We want to ensure that all formatting steps are completed for every component
+        // before we try running more expensive checks, like unit and integration tests.
+        Self::fmt(env, &["--check".to_string()])?;
+        components.iter().try_for_each(|c| c.clippy(env, args))?;
+        components.iter().try_for_each(|c| c.test(env, args))?;
+        Self::ui(env, false)
     }
 
     fn clean(env: &mut BsanEnv) -> Result<()> {
@@ -45,82 +84,172 @@ impl Command {
         Ok(())
     }
 
-    fn install(env: &mut BsanEnv, args: &[String], quiet: bool) -> Result<()> {
-        env.install("cargo-bsan", args)?;
-        env.install("bsan-driver", args)?;
-        Self::install_llvm_pass(env)?;
-        Self::install_runtime(env, args, quiet)
-    }
-
-    fn ci(env: &mut BsanEnv, flags: &[String], quiet: bool) -> Result<()> {
-        Self::fmt(env, flags, true)?;
-        Self::clippy(env, flags, true)?;
-        Self::build(env, flags, quiet, false)?;
-        Self::test(env, flags, false)?;
-        Self::doc(env, flags)?;
+    fn bin(env: &mut BsanEnv, binary_name: String, flags: &[String]) -> Result<()> {
+        let binary_name = env.target_binary(&binary_name);
+        cmd!(env.sh, "{binary_name} {flags...}").run()?;
         Ok(())
     }
 
-    fn fmt(env: &BsanEnv, flags: &[String], check: bool) -> Result<()> {
-        env.fmt(flags, check)
+    fn opt(env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        let pass = BsanLLVMPlugin.build(env, &[])?;
+        let pass = pass.to_str().unwrap();
+        let opt = env.target_binary("opt");
+        let _ =
+            cmd!(env.sh, "{opt} --load-pass-plugin={pass} -passes=bsan {args...}").quiet().run();
+        Ok(())
     }
+}
 
-    fn doc(env: &mut BsanEnv, flags: &[String]) -> Result<()> {
-        env.doc(".", flags)?;
-        env.with_rust_flags(RT_FLAGS, |env| env.doc("bsan-rt", flags))
-    }
+#[derive(Debug, Clone, Copy, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum Component {
+    BsanDriver,
+    CargoBsan,
+    BsanRuntime,
+    BsanLLVMPass,
+}
 
-    fn test(env: &mut BsanEnv, flags: &[String], _bless: bool) -> Result<()> {
-        env.with_rust_flags(RT_FLAGS, |env| env.test("bsan-rt", flags))?;
-        env.test("bsan-driver", flags)?;
-        env.test("cargo-bsan", flags)?;
+#[macro_export]
+macro_rules! all_components {
+    () => {
+        [
+            Component::BsanDriver,
+            Component::CargoBsan,
+            Component::BsanRuntime,
+            Component::BsanLLVMPass,
+        ]
+    };
+}
 
-        env.in_mode(Mode::Release, |env| {
-            env.build("bsan-driver", flags, true)?;
-            env.build("cargo-bsan", flags, true)?;
-            let driver = env.assert_artifact("bsan-driver");
-            let cargo_plugin = &env.assert_artifact("cargo-bsan");
-            Self::build_runtime(env, flags, true)?;
-            let llvm_plugin = Self::build_llvm_pass(env)?;
+impl Deref for Component {
+    type Target = dyn Buildable;
 
-            env.sh.set_var("BSAN_PLUGIN", llvm_plugin);
-            env.sh.set_var("BSAN_DRIVER", driver);
-            env.sh.set_var("BSAN_RT_SYSROOT", env.artifact_dir());
-            env.sh.set_var("BSAN_SYSROOT", path!(&env.build_dir / "sysroot"));
-
-            cmd!(env.sh, "{cargo_plugin} bsan setup").run()?;
-            cmd!(env.sh, "cargo test -p bsan --test ui").run()?;
-            Ok(())
-        })
-    }
-
-    fn clippy(env: &mut BsanEnv, flags: &[String], check: bool) -> Result<()> {
-        let run_clippy = |env: &mut BsanEnv| {
-            env.clippy(".", flags)?;
-            env.with_rust_flags(RT_FLAGS, |env| env.clippy("bsan-rt", flags))
-        };
-        if check {
-            env.with_rust_flags(&["-Dwarnings"], run_clippy)
-        } else {
-            run_clippy(env)
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Component::BsanDriver => &BsanDriver,
+            Component::CargoBsan => &CargoBsan,
+            Component::BsanRuntime => &BsanRuntime,
+            Component::BsanLLVMPass => &BsanLLVMPlugin,
         }
     }
+}
 
-    fn check(env: &mut BsanEnv, flags: &[String]) -> Result<()> {
-        env.check(".", flags)?;
-        env.with_rust_flags(RT_FLAGS, |env| env.check("bsan-rt", flags))
+pub trait Buildable {
+    fn artifact(&self) -> &'static str;
+
+    fn doc(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
+
+    fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<PathBuf>;
+
+    fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
+
+    fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
+
+    fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
+
+    fn check(&self, env: &mut BsanEnv, args: &[String]) -> Result<()>;
+}
+
+macro_rules! impl_component {
+    ($struct_name:ident, $artifact_name:expr) => {
+        struct $struct_name;
+
+        impl Buildable for $struct_name {
+            #[inline(always)]
+            fn artifact(&self) -> &'static str {
+                $artifact_name
+            }
+
+            fn doc(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+                env.doc(self.artifact(), args)
+            }
+
+            fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<PathBuf> {
+                let artifact = self.artifact();
+                env.build(artifact, args, true)?;
+                Ok(env.assert_artifact(artifact))
+            }
+
+            fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+                env.clippy(self.artifact(), args)
+            }
+
+            fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+                env.install(self.artifact(), args)
+            }
+
+            fn check(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+                env.check(self.artifact(), args)
+            }
+
+            fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+                env.test(self.artifact(), args)
+            }
+        }
+    };
+}
+
+impl_component!(BsanDriver, "bsan-driver");
+impl_component!(CargoBsan, "cargo-bsan");
+
+static RT_FLAGS: &[&str] =
+    &["-Cpanic=abort", "-Zpanic_abort_tests", "-Cembed-bitcode=yes", "-Clto"];
+
+struct BsanRuntime;
+
+impl Buildable for BsanRuntime {
+    fn artifact(&self) -> &'static str {
+        "libbsan_rt.a"
     }
 
-    fn build(env: &mut BsanEnv, flags: &[String], quiet: bool, release: bool) -> Result<()> {
-        env.in_mode(Mode::release(release), |env| {
-            Self::build_llvm_pass(env)?;
-            env.build(".", flags, false)?;
-            Self::build_runtime(env, flags, quiet)?;
-            Ok(())
+    fn doc(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.doc("bsan-rt", args)
+    }
+
+    fn build(&self, env: &mut BsanEnv, args: &[String]) -> Result<PathBuf> {
+        env.with_rust_flags(RT_FLAGS, |env| env.build("bsan-rt", args, true))?;
+        let artifact = env.assert_artifact(self.artifact());
+        let llvm_objcopy = env.target_binary("llvm-objcopy");
+        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_*").arg(&artifact).quiet().run()?;
+        Ok(artifact)
+    }
+
+    fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.with_rust_flags(RT_FLAGS, |env| env.test("bsan-rt", args))
+    }
+
+    fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.with_rust_flags(RT_FLAGS, |env| env.clippy("bsan-rt", args))
+    }
+
+    fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.in_mode(Mode::Release, |env| {
+            let runtime = self.build(env, args)?;
+            env.copy_to_sysroot_libdir(&runtime)
         })
     }
 
-    pub fn build_llvm_pass(env: &mut BsanEnv) -> Result<PathBuf> {
+    fn check(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.with_rust_flags(RT_FLAGS, |env| env.check("bsan-rt", args))
+    }
+}
+
+struct BsanLLVMPlugin;
+
+impl Buildable for BsanLLVMPlugin {
+    fn artifact(&self) -> &'static str {
+        #[cfg(target_os = "macos")]
+        let artifact = "libbsan_plugin.dylib";
+        #[cfg(target_os = "linux")]
+        let artifact = "libbsan_plugin.so";
+        artifact
+    }
+
+    fn doc(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
+    }
+
+    fn build(&self, env: &mut BsanEnv, _args: &[String]) -> Result<PathBuf> {
         let cxxflags = env.llvm_config().arg("--cxxflags").output()?.stdout;
 
         let mut cfg = env.cc();
@@ -156,7 +285,7 @@ impl Command {
             show_error!("Unable to locate LLVM within rust_dev artifacts ({lib_llvm:?}).")
         }
 
-        let library_path = path!(out_dir / BSAN_PLUGIN);
+        let library_path = path!(out_dir / self.artifact());
 
         let cmd = cmd!(
             env.sh,
@@ -167,40 +296,22 @@ impl Command {
         Ok(library_path)
     }
 
-    fn install_llvm_pass(env: &mut BsanEnv) -> Result<()> {
+    fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.with_rust_flags(RT_FLAGS, |env| env.test("bsan-rt", args))
+    }
+
+    fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.with_rust_flags(RT_FLAGS, |env| env.clippy("bsan-rt", args))
+    }
+
+    fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
         env.in_mode(Mode::Release, |env| {
-            let pass = Self::build_llvm_pass(env)?;
+            let pass = self.build(env, args)?;
             env.copy_to_sysroot_libdir(&pass)
         })
     }
 
-    fn build_runtime(env: &mut BsanEnv, flags: &[String], quiet: bool) -> Result<PathBuf> {
-        env.with_rust_flags(RT_FLAGS, |env| env.build("bsan-rt", flags, quiet))?;
-        let artifact = env.assert_artifact(BSAN_RT);
-        let llvm_objcopy = env.target_binary("llvm-objcopy");
-        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_*").arg(&artifact).quiet().run()?;
-        Ok(artifact)
-    }
-
-    fn install_runtime(env: &mut BsanEnv, flags: &[String], quiet: bool) -> Result<()> {
-        env.in_mode(Mode::Release, |env| {
-            let runtime = Self::build_runtime(env, flags, quiet)?;
-            env.copy_to_sysroot_libdir(&runtime)
-        })
-    }
-
-    fn bin(env: &mut BsanEnv, name: String, flags: &[String]) -> Result<()> {
-        let binary = env.target_binary(&name);
-        let _ = cmd!(env.sh, "{binary} {flags...}").quiet().run();
-        Ok(())
-    }
-
-    fn opt(env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        let pass = Self::build_llvm_pass(env)?;
-        let pass = pass.to_str().unwrap();
-        let opt = env.target_binary("opt");
-        let _ =
-            cmd!(env.sh, "{opt} --load-pass-plugin={pass} -passes=bsan {args...}").quiet().run();
+    fn check(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
         Ok(())
     }
 }
