@@ -258,7 +258,6 @@ extern "C" fn __bsan_deinit() {
 /// Creates a new borrow tag for the given provenance object.
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_retag(
-    span: Span,
     prov: *mut Provenance,
     size: usize,
     perm_kind: u8,
