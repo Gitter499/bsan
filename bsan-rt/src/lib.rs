@@ -28,7 +28,7 @@ use libc_print::std_name::*;
 pub use local::*;
 
 mod block;
-mod borrowtracker;
+mod borrow_tracker;
 mod shadow;
 
 macro_rules! println {
