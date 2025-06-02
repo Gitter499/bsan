@@ -10,6 +10,8 @@ use core::cmp::Ordering;
 use core::ops::Range;
 use core::{iter, mem};
 
+use crate::types::Size;
+
 #[derive(Clone, Debug)]
 struct Elem<T> {
     /// The range covered by this element; never empty.
@@ -22,15 +24,12 @@ pub struct RangeMap<T> {
     v: Vec<Elem<T>>,
 }
 
-// Miri's implementation uses `Size` (size_t) via rustc_abi. Not sure why since it seems
-// to be treated as u64 anyways. Refactored to using usize, with casts to u64, don't see any
-// immediate side-effects of this change
 impl<T> RangeMap<T> {
     /// Creates a new `RangeMap` for the given size, and with the given initial value used for
     /// the entire range.
     #[inline(always)]
-    pub fn new(size: usize, init: T) -> RangeMap<T> {
-        let size = size as u64;
+    pub fn new(size: Size, init: T) -> RangeMap<T> {
+        let size = size.bytes();
         let v = if size > 0 { vec![Elem { range: 0..size, data: init }] } else { Vec::new() };
         RangeMap { v }
     }
@@ -61,9 +60,9 @@ impl<T> RangeMap<T> {
     /// The iterator also provides the range of the given element.
     /// How exactly the ranges are split can differ even for otherwise identical
     /// maps, so user-visible behavior should never depend on the exact range.
-    pub fn iter(&self, offset: usize, len: usize) -> impl Iterator<Item = (Range<u64>, &T)> {
-        let offset = offset as u64;
-        let len = len as u64;
+    pub fn iter(&self, offset: Size, len: Size) -> impl Iterator<Item = (Range<u64>, &T)> {
+        let offset = offset.bytes();
+        let len = len.bytes();
         // Compute a slice starting with the elements we care about.
         let slice: &[Elem<T>] = if len == 0 {
             // We just need any empty iterator. We don't even want to
@@ -138,14 +137,14 @@ impl<T> RangeMap<T> {
     /// so user-visible behavior should never depend on the exact range.
     pub fn iter_mut(
         &mut self,
-        offset: usize,
-        len: usize,
+        offset: Size,
+        len: Size,
     ) -> impl Iterator<Item = (Range<u64>, &mut T)>
     where
         T: Clone + PartialEq,
     {
-        let offset = offset as u64;
-        let len = len as u64;
+        let offset = offset.bytes();
+        let len = len.bytes();
         // Compute a slice containing exactly the elements we care about
         let slice: &mut [Elem<T>] = if len == 0 {
             // We just need any empty iterator. We don't even want to
@@ -250,14 +249,18 @@ mod test {
 
     /// Query the map at every offset in the range and collect the results.
     fn to_vec<T: Copy>(map: &RangeMap<T>, offset: usize, len: usize) -> Vec<T> {
-        (offset..offset + len).map(|i| map.iter(i, 1).next().map(|(_, &t)| t).unwrap()).collect()
+        (offset..offset + len)
+            .map(|i| {
+                map.iter(Size::from_bytes(i), Size::from_bytes(1)).next().map(|(_, &t)| t).unwrap()
+            })
+            .collect()
     }
 
     #[test]
     fn basic_insert() {
-        let mut map = RangeMap::<i32>::new(20, -1);
+        let mut map = RangeMap::<i32>::new(Size::from_bytes(20), -1);
         // Insert.
-        for (_, x) in map.iter_mut(10, 1) {
+        for (_, x) in map.iter_mut(Size::from_bytes(10), Size::from_bytes(1)) {
             *x = 42;
         }
         // Check.
@@ -265,10 +268,10 @@ mod test {
         assert_eq!(map.v.len(), 3);
 
         // Insert with size 0.
-        for (_, x) in map.iter_mut(10, 0) {
+        for (_, x) in map.iter_mut(Size::from_bytes(10), Size::from_bytes(0)) {
             *x = 19;
         }
-        for (_, x) in map.iter_mut(11, 0) {
+        for (_, x) in map.iter_mut(Size::from_bytes(11), Size::from_bytes(0)) {
             *x = 19;
         }
         assert_eq!(to_vec(&map, 10, 2), vec![42, -1]);
@@ -277,17 +280,17 @@ mod test {
 
     #[test]
     fn gaps() {
-        let mut map = RangeMap::<i32>::new(20, -1);
-        for (_, x) in map.iter_mut(11, 1) {
+        let mut map = RangeMap::<i32>::new(Size::from_bytes(20), -1);
+        for (_, x) in map.iter_mut(Size::from_bytes(11), Size::from_bytes(1)) {
             *x = 42;
         }
-        for (_, x) in map.iter_mut(15, 1) {
+        for (_, x) in map.iter_mut(Size::from_bytes(15), Size::from_bytes(1)) {
             *x = 43;
         }
         assert_eq!(map.v.len(), 5);
         assert_eq!(to_vec(&map, 10, 10), vec![-1, 42, -1, -1, -1, 43, -1, -1, -1, -1]);
 
-        for (_, x) in map.iter_mut(10, 10) {
+        for (_, x) in map.iter_mut(Size::from_bytes(10), Size::from_bytes(10)) {
             if *x < 42 {
                 *x = 23;
             }
@@ -296,16 +299,21 @@ mod test {
         assert_eq!(to_vec(&map, 10, 10), vec![23, 42, 23, 23, 23, 43, 23, 23, 23, 23]);
         assert_eq!(to_vec(&map, 13, 5), vec![23, 23, 43, 23, 23]);
 
-        for (_, x) in map.iter_mut(15, 5) {
+        for (_, x) in map.iter_mut(Size::from_bytes(15), Size::from_bytes(5)) {
             *x = 19;
         }
         assert_eq!(map.v.len(), 6);
         assert_eq!(to_vec(&map, 10, 10), vec![23, 42, 23, 23, 23, 19, 19, 19, 19, 19]);
         // Should be seeing two blocks with 19.
-        assert_eq!(map.iter(15, 2).map(|(_, &t)| t).collect::<Vec<_>>(), vec![19, 19]);
+        assert_eq!(
+            map.iter(Size::from_bytes(15), Size::from_bytes(2))
+                .map(|(_, &t)| t)
+                .collect::<Vec<_>>(),
+            vec![19, 19]
+        );
 
         // A NOP `iter_mut` should trigger merging.
-        for _ in map.iter_mut(15, 5) {}
+        for _ in map.iter_mut(Size::from_bytes(15), Size::from_bytes(5)) {}
         assert_eq!(map.v.len(), 5);
         assert_eq!(to_vec(&map, 10, 10), vec![23, 42, 23, 23, 23, 19, 19, 19, 19, 19]);
     }
@@ -313,14 +321,14 @@ mod test {
     #[test]
     #[should_panic]
     fn out_of_range_iter_mut() {
-        let mut map = RangeMap::<i32>::new(20, -1);
-        let _ = map.iter_mut(11, 11);
+        let mut map = RangeMap::<i32>::new(Size::from_bits(20), -1);
+        let _ = map.iter_mut(Size::from_bytes(11), Size::from_bits(11));
     }
 
     #[test]
     #[should_panic]
     fn out_of_range_iter() {
-        let map = RangeMap::<i32>::new(20, -1);
-        let _ = map.iter(11, 11);
+        let map = RangeMap::<i32>::new(Size::from_bytes(20), -1);
+        let _ = map.iter(Size::from_bytes(11), Size::from_bytes(11));
     }
 }
