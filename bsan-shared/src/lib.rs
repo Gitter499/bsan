@@ -1,8 +1,10 @@
 #![cfg_attr(not(test), no_std)]
 #![allow(dead_code)]
-mod foreign_access_skipping;
-mod helpers;
-mod perms;
-pub use foreign_access_skipping::*;
-pub use helpers::*;
-pub use perms::*;
+
+#[macro_use]
+extern crate alloc;
+
+pub mod foreign_access_skipping;
+pub mod helpers;
+pub mod perms;
+pub mod range_map;
