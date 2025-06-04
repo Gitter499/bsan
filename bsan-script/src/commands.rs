@@ -7,9 +7,9 @@ use clap::ValueEnum;
 use path_macro::path;
 use xshell::cmd;
 
+use crate::Command;
 use crate::env::{BsanEnv, Mode};
 use crate::utils::{self, show_error};
-use crate::Command;
 
 impl Command {
     pub fn exec(self) -> Result<()> {

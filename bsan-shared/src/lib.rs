@@ -3,4 +3,6 @@
 mod foreign_access_skipping;
 mod helpers;
 mod perms;
+pub use foreign_access_skipping::*;
+pub use helpers::*;
 pub use perms::*;
