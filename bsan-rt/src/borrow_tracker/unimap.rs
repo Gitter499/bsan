@@ -248,6 +248,7 @@ impl<'a, V> UniEntry<'a, V> {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use core::fmt::Debug;
 
