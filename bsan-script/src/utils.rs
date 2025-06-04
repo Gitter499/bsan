@@ -1,9 +1,9 @@
 use std::fs::canonicalize;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use rustc_version::VersionMeta;
-use xshell::{Shell, cmd};
+use xshell::{cmd, Shell};
 
 pub fn show_error_(msg: &impl std::fmt::Display) -> ! {
     eprintln!("fatal error: {msg}");
