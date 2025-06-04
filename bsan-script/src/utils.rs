@@ -114,7 +114,7 @@ pub fn install_git_hooks(root_dir: &PathBuf) -> Result<()> {
             show_error!("{} script {:?} not found", &hook_name, &hook_path);
         }
 
-        match std::fs::symlink_metadata(path!(&hooks_dir / &hook_name)) {
+        match std::fs::symlink_metadata(path!(&git_hooks_dir / &hook_name)) {
             Ok(metadata) => {
                 if metadata.is_symlink() {
                     println!("{:?} hook is already symlinked (added). If you wish to reinstall, remove symlink from {:?}", &hook_name, &hook_path);
@@ -127,14 +127,14 @@ pub fn install_git_hooks(root_dir: &PathBuf) -> Result<()> {
 
         // We don't support development on Windows yet
         match std::os::unix::fs::symlink(
-            path!(&git_hooks_dir / &hook_name),
             path!(hooks_dir / &hook_name),
+            path!(&git_hooks_dir / &hook_name),
         ) {
             Err(e) => show_error!("Failed to symlink {} script\nFS ERROR: {e}", &hook_name),
             _ => {
                 // Check for successful symlink
 
-                match std::fs::symlink_metadata(path!(&hooks_dir / &hook_name)) {
+                match std::fs::symlink_metadata(path!(&git_hooks_dir / &hook_name)) {
                     Ok(metadata) => {
                         if !metadata.is_symlink() {
                             show_error!("Failed to add {:?} hook. Failed symlink", &hook_name);
