@@ -107,6 +107,7 @@ pub enum Component {
     CargoBsan,
     BsanRuntime,
     BsanLLVMPass,
+    BsanShared,
 }
 
 #[macro_export]
@@ -117,6 +118,7 @@ macro_rules! all_components {
             Component::CargoBsan,
             Component::BsanRuntime,
             Component::BsanLLVMPass,
+            Component::BsanShared,
         ]
     };
 }
@@ -130,6 +132,7 @@ impl Deref for Component {
             Component::CargoBsan => &CargoBsan,
             Component::BsanRuntime => &BsanRuntime,
             Component::BsanLLVMPass => &BsanLLVMPlugin,
+            Component::BsanShared => &BsanShared,
         }
     }
 }
@@ -191,6 +194,7 @@ macro_rules! impl_component {
 
 impl_component!(BsanDriver, "bsan-driver");
 impl_component!(CargoBsan, "cargo-bsan");
+impl_component!(BsanShared, "bsan-shared");
 
 static RT_FLAGS: &[&str] =
     &["-Cpanic=abort", "-Zpanic_abort_tests", "-Cembed-bitcode=yes", "-Clto"];
