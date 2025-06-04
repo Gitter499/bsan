@@ -126,7 +126,10 @@ pub fn install_git_hooks(root_dir: &PathBuf) -> Result<()> {
         };
 
         // We don't support development on Windows yet
-        match std::os::unix::fs::symlink(&git_hooks_dir, path!(hooks_dir / &hook_name)) {
+        match std::os::unix::fs::symlink(
+            path!(&git_hooks_dir / &hook_name),
+            path!(hooks_dir / &hook_name),
+        ) {
             Err(e) => show_error!("Failed to symlink {} script\nFS ERROR: {e}", &hook_name),
             _ => {
                 // Check for successful symlink
