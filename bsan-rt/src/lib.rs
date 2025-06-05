@@ -30,6 +30,7 @@ pub use local::*;
 mod block;
 mod borrow_tracker;
 mod shadow;
+mod span;
 
 macro_rules! println {
     ($($arg:tt)*) => {
@@ -160,11 +161,6 @@ impl fmt::Debug for BorTag {
         write!(f, "<{}>", self.0)
     }
 }
-
-/// Unique identifier for a source location. Every update to the tree
-/// is associated with a `Span`, which allows us to provide a detailed history
-/// of the actions that lead to an aliasing violation.
-pub type Span = usize;
 
 /// Pointers have provenance (RFC #3559). In Tree Borrows, this includes an allocation ID
 /// and a borrow tag. We also include a pointer to the "lock" location for the allocation,
