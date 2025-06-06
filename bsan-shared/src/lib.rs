@@ -9,3 +9,4 @@ pub mod foreign_access_skipping;
 pub mod helpers;
 pub mod perms;
 pub mod range_map;
+pub mod types;
