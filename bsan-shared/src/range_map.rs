@@ -6,6 +6,7 @@
 //! via the iteration APIs.
 
 #![allow(dead_code)]
+use alloc::alloc::Global;
 use alloc::vec::Vec;
 use core::alloc::Allocator;
 use core::cmp::Ordering;
@@ -23,8 +24,24 @@ struct Elem<T> {
     data: T,
 }
 #[derive(Clone, Debug)]
-pub struct RangeMap<T, A: Allocator> {
+pub struct RangeMap<T, A: Allocator = Global> {
     v: Vec<Elem<T>, A>,
+}
+
+impl<T> RangeMap<T, Global> {
+    // Globally allocated range map
+    /// Creates a new `RangeMap` for the given size, and with the given initial value used for
+    /// the entire range.
+    #[inline(always)]
+    pub fn new(size: Size, init: T) -> RangeMap<T, Global> {
+        let size = size.bytes();
+        let v = if size > 0 {
+            vec_in![Global, Elem { range: 0..size, data: init }]
+        } else {
+            Vec::new_in(Global)
+        };
+        RangeMap { v }
+    }
 }
 
 impl<T, A> RangeMap<T, A>
@@ -32,9 +49,9 @@ where
     A: Allocator,
 {
     /// Creates a new `RangeMap` for the given size, and with the given initial value used for
-    /// the entire range.
+    /// the entire range with a custom allocator.
     #[inline(always)]
-    pub fn new(size: Size, init: T, alloc: A) -> RangeMap<T, A> {
+    pub fn new_in(size: Size, init: T, alloc: A) -> RangeMap<T, A> {
         let size = size.bytes();
         let v = if size > 0 {
             vec_in![alloc, Elem { range: 0..size, data: init }]
