@@ -4,8 +4,13 @@
 
 extern crate alloc;
 
-pub mod foreign_access_skipping;
-pub mod helpers;
+mod foreign_access_skipping;
+mod helpers;
 pub mod perms;
-pub mod range_map;
-pub mod types;
+mod range_map;
+mod types;
+
+pub use foreign_access_skipping::*;
+pub use helpers::*;
+pub use perms::*;
+pub use range_map::*;
