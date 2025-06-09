@@ -11,6 +11,7 @@ use core::ops::Range;
 use bsan_shared::diagnostics::*;
 use bsan_shared::*;
 
+use crate::alloc::string::ToString;
 use crate::borrow_tracker::tree::{LocationState, Tree};
 use crate::borrow_tracker::unimap::UniIndex;
 use crate::span::*;
@@ -225,7 +226,7 @@ where
     }
 }
 
-impl<'tcx> Tree {
+impl Tree {
     /// Climb the tree to get the tag of a distant ancestor.
     /// Allows operations on tags that are unreachable by the program
     /// but still exist in the tree. Not guaranteed to perform consistently
@@ -441,10 +442,7 @@ impl DisplayFmt {
     /// and `?Res`/`?Re*`/`?Act`/`?Frz`/`?Dis` for unaccessed locations.
     fn print_perm(&self, perm: Option<LocationState>) -> String {
         if let Some(perm) = perm {
-            format!(
-                "{ac}",
-                ac = if perm.is_accessed() { self.accessed.yes } else { self.accessed.no },
-            )
+            (if perm.is_accessed() { self.accessed.yes } else { self.accessed.no }).to_string()
         } else {
             format!("{}{}", self.accessed.meh, self.perm.uninit)
         }
