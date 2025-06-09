@@ -103,6 +103,10 @@ where
         self.mapping.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Whether this key has an associated index or not.
     pub fn contains_key(&self, key: &K) -> bool {
         self.mapping.contains_key(key)
