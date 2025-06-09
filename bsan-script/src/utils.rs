@@ -1,14 +1,15 @@
-use std::fs::canonicalize;
+use std::fs::{self, canonicalize, File};
 use std::io;
-use std::io::Write;
-use std::path::PathBuf;
+use std::io::{BufReader, Write};
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use path_macro::path;
 use rustc_version::VersionMeta;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
-use xshell::{cmd, Shell};
+use xshell::{cmd, Cmd, Shell};
+use xz2::bufread::XzDecoder;
 
 pub fn show_error_(msg: &impl std::fmt::Display) -> ! {
     eprintln!("fatal error: {msg}");
@@ -29,13 +30,14 @@ pub fn is_running_on_ci() -> bool {
 pub enum PromptResult {
     Yes, // y/Y/yes
     No,  // n/N/no
-         //Print, // p/P/print
 }
 
 /// Prompt a user for a answer, looping until they enter an accepted input or nothing
-pub fn prompt_user(prompt: &str) -> io::Result<Option<PromptResult>> {
-    let mut input = String::new();
-    loop {
+pub fn prompt_user(prompt: &str) -> Result<Option<PromptResult>> {
+    if is_running_on_ci() {
+        return Ok(Some(PromptResult::Yes));
+    } else {
+        let mut input = String::new();
         print!("{prompt} ");
         io::stdout().flush()?;
         input.clear();
@@ -45,9 +47,10 @@ pub fn prompt_user(prompt: &str) -> io::Result<Option<PromptResult>> {
             "n" | "no" => return Ok(Some(PromptResult::No)),
             "" => return Ok(Some(PromptResult::Yes)),
             _ => {
-                show_error!("Unrecognized option '{}'\nNOTE: press Ctrl+C to exit", input.trim());
+                eprintln!("Unrecognized option '{}'.", input.trim());
+                Ok(None)
             }
-        };
+        }
     }
 }
 
@@ -69,6 +72,7 @@ pub fn version_meta(sh: &Shell, toolchain: &str) -> Result<VersionMeta> {
     rustc_version::version_meta_for(&target_output).map_err(|e| anyhow!("{e}"))
 }
 
+#[allow(dead_code)]
 pub fn flagsplit(flags: &str) -> Vec<String> {
     // This code is taken from `RUSTFLAGS` handling in cargo.
     flags.split(' ').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect()
@@ -96,26 +100,23 @@ pub fn install_git_hooks(root_dir: &PathBuf) -> Result<()> {
     let install_hook = |hook: GitHook| {
         let hooks_dir = path!(root_dir / "bsan-script" / "etc");
         let hook_name = hook.value();
+
         println!("Installing {:?} hook...", &hook_name);
 
-        let hook_path = hooks_dir.join(hook_name.to_string() + ".sh");
+        let hook_path = path!(hooks_dir / format!("{hook_name}.sh"));
 
         if !hook_path.exists() {
             show_error!("{} script {:?} not found", &hook_name, &hook_path);
         }
 
-        match std::fs::symlink_metadata(path!(&git_hooks_dir / &hook_name)) {
-            Ok(metadata) => {
-                if metadata.is_symlink() {
-                    println!("{:?} hook is already symlinked (added). If you wish to reinstall, remove symlink from {:?}", &hook_name, &git_hooks_dir);
-                    return;
-                }
-            }
-            // TODO: Handle NotFound error and propagate other errors
-            Err(_) => {}
-        };
+        if let Ok(metadata) = std::fs::symlink_metadata(path!(&git_hooks_dir / &hook_name))
+            && metadata.is_symlink()
+        {
+            println!("{:?} hook is already symlinked (added). If you wish to reinstall, remove symlink from {:?}", &hook_name, &git_hooks_dir);
+            return;
+        }
 
-        let hook_script = hook_name.to_string() + ".sh";
+        let hook_script = format!("{hook_name}.sh");
         // We don't support development on Windows yet
         match std::os::unix::fs::symlink(
             path!(hooks_dir / hook_script),
@@ -124,7 +125,6 @@ pub fn install_git_hooks(root_dir: &PathBuf) -> Result<()> {
             Err(e) => show_error!("Failed to symlink {} script\nFS ERROR: {e}", &hook_name),
             _ => {
                 // Check for successful symlink
-
                 match std::fs::symlink_metadata(path!(&git_hooks_dir / &hook_name)) {
                     Ok(metadata) => {
                         if !metadata.is_symlink() {
@@ -149,9 +149,145 @@ pub fn install_git_hooks(root_dir: &PathBuf) -> Result<()> {
         {
             continue;
         }
-
         install_hook(hook);
     }
-
     Ok(())
+}
+
+static CURL_FLAGS: &[&str] = &[
+    // follow redirect
+    "--location",
+    // timeout if speed is < 10 bytes/sec for > 30 seconds
+    "--speed-time",
+    "30",
+    "--speed-limit",
+    "10",
+    // timeout if cannot connect within 30 seconds
+    "--connect-timeout",
+    "30",
+    // if there is an error, don't restart the download,
+    // instead continue where it left off.
+    "--continue-at",
+    "-",
+    // retry up to 3 times.  note that this means a maximum of 4
+    // attempts will be made, since the first attempt isn't a *re*try.
+    "--retry",
+    "3",
+    // show errors, even if --silent is specified
+    "--show-error",
+    // set timestamp of downloaded file to that of the server
+    "--remote-time",
+    // fail on non-ok http status
+    "--fail",
+];
+
+fn extract_curl_version(out: &[u8]) -> semver::Version {
+    let out = String::from_utf8_lossy(out);
+    // The output should look like this: "curl <major>.<minor>.<patch> ..."
+    out.lines()
+        .next()
+        .and_then(|line| line.split(" ").nth(1))
+        .and_then(|version| semver::Version::parse(version).ok())
+        .unwrap_or(semver::Version::new(1, 0, 0))
+}
+
+fn curl_version(sh: &Shell) -> semver::Version {
+    let curl = cmd!(sh, "curl -V");
+    let Ok(out) = curl.output() else { return semver::Version::new(1, 0, 0) };
+    let out = out.stdout;
+    extract_curl_version(&out)
+}
+
+pub fn download_file(
+    sh: &Shell,
+    url: &Path,
+    destination: &Path,
+    help_on_error: &str,
+) -> Result<()> {
+    println!("downloading {}", url.display());
+
+    if destination.exists() {
+        fs::remove_file(destination)?;
+    }
+
+    let mut curl: Cmd<'_> = cmd!(sh, "curl");
+    curl = curl.args([
+        // output file
+        "--output",
+        destination.to_str().unwrap(),
+    ]);
+    curl = curl.args(CURL_FLAGS);
+    curl = curl.arg(url);
+
+    if is_running_on_ci() {
+        curl = curl.arg("--silent");
+    } else {
+        curl = curl.arg("--progress-bar");
+    }
+    // --retry-all-errors was added in 7.71.0, don't use it if curl is old.
+    if curl_version(sh) >= semver::Version::new(7, 71, 0) {
+        curl = curl.arg("--retry-all-errors");
+    }
+
+    if curl.quiet().run().is_err() {
+        if !help_on_error.is_empty() {
+            show_error!("{help_on_error}");
+        }
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+pub fn unpack(tarball: &Path, dst: &Path, pattern: &str) -> Result<()> {
+    if !dst.exists() {
+        std::fs::create_dir_all(dst)?;
+    }
+    println!("extracting {}", tarball.display());
+    // `tarball` ends with `.tar.xz`; strip that suffix
+    // example: `rust-dev-nightly-x86_64-unknown-linux-gnu`
+    let uncompressed_filename =
+        Path::new(tarball.file_name().expect("missing tarball filename")).file_stem().unwrap();
+    let directory_prefix = Path::new(Path::new(uncompressed_filename).file_stem().unwrap());
+
+    // decompress the file
+    let data = File::open(tarball)?;
+    let decompressor = XzDecoder::new(BufReader::new(data));
+    let mut tar = tar::Archive::new(decompressor);
+
+    for member in tar.entries()? {
+        let mut member = member?;
+        let original_path = member.path()?.into_owned();
+        if original_path == directory_prefix {
+            continue;
+        }
+        let mut short_path = original_path.strip_prefix(directory_prefix)?;
+        short_path = short_path.strip_prefix(pattern).unwrap_or(short_path);
+        let dst_path = dst.join(short_path);
+
+        if !member.unpack_in(dst)? {
+            panic!("path traversal attack ??");
+        }
+        let src_path = dst.join(original_path);
+        if src_path.is_dir() && dst_path.exists() {
+            continue;
+        }
+        move_file(src_path, dst_path)?;
+    }
+    let dst_dir = dst.join(directory_prefix);
+    if dst_dir.exists() {
+        fs::remove_dir_all(&dst_dir)?;
+    }
+    Ok(())
+}
+
+/// Rename a file if from and to are in the same filesystem or
+/// copy and remove the file otherwise
+fn move_file<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> io::Result<()> {
+    match fs::rename(&from, &to) {
+        Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
+            std::fs::copy(&from, &to)?;
+            std::fs::remove_file(&from)
+        }
+        r => r,
+    }
 }

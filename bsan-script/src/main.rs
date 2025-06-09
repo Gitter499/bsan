@@ -1,13 +1,16 @@
-// Our build script is a modified copy of Miri's build script.
+// Our build script combines many preexisting components from Miri's build script
+// and the Rust compiler's bootstrap script.
 #![feature(io_error_more)]
 use anyhow::Result;
 use clap::{command, Parser};
 use commands::Component;
 //mod commands;
 mod commands;
-mod download;
 mod env;
+mod setup;
 mod utils;
+
+static TOOLCHAIN_NAME: &str = "bsan";
 
 #[derive(Clone, Debug, Parser)]
 pub enum Command {
@@ -106,6 +109,9 @@ pub enum Command {
 #[command(after_help = "Environment variables:
   CARGO_EXTRA_FLAGS: Pass extra flags to all cargo invocations")]
 pub struct Cli {
+    /// Silence build
+    #[arg(short, long)]
+    quiet: bool,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -113,6 +119,6 @@ pub struct Cli {
 fn main() -> Result<()> {
     let args = std::env::args();
     let args = Cli::parse_from(args);
-    args.command.exec()?;
+    args.command.exec(args.quiet)?;
     Ok(())
 }
