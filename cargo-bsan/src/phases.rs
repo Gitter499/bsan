@@ -49,7 +49,7 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         env::set_var("BSAN_PLUGIN", bsan_plugin);
     }
 
-    let Some(runtime_dir) = find_library("BSAN_RT_DIR", &host_sysroot, "libbsan_rt.a") else {
+    let Some(runtime_dir) = find_library_dir("BSAN_RT_DIR", &host_sysroot, "libbsan_rt.a") else {
         show_error!(
             "failed to locate the BorrowSanitizer runtime (libbsan_rt.a) within the host sysroot."
         );

@@ -52,10 +52,15 @@ pub fn cargo() -> Command {
 }
 
 pub fn find_library(default: &str, sysroot: &Path, libname: &str) -> Option<PathBuf> {
+    find_library_dir(default, sysroot, libname).map(|p| p.join(libname))
+}
+
+pub fn find_library_dir(default: &str, sysroot: &Path, libname: &str) -> Option<PathBuf> {
     env::var_os(default).map(|o| o.into()).or_else(|| {
-        let plugin = path!(sysroot / "lib" / libname);
+        let libdir = path!(sysroot / "lib");
+        let plugin = path!(&libdir / libname);
         if plugin.exists() {
-            Some(plugin)
+            Some(libdir)
         } else {
             None
         }
