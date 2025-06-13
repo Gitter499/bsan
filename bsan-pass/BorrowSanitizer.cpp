@@ -193,10 +193,6 @@ namespace
             return getProvenance(I->getOperand(i));
         }
 
-        CallInst *createAllocationMetadata(Value *AllocAddr, APInt &AllocSize)
-        {
-        }
-
         void instrumentLoad(LoadInst &I) {}
 
         void instrumentVectorLoad(LoadInst &I) {}
