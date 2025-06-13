@@ -7,9 +7,9 @@ use clap::ValueEnum;
 use path_macro::path;
 use xshell::cmd;
 
+use crate::Command;
 use crate::env::{BsanEnv, Mode};
 use crate::utils::install_git_hooks;
-use crate::Command;
 
 impl Command {
     pub fn exec(self, quiet: bool) -> Result<()> {

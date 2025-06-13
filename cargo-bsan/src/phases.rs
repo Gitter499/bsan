@@ -49,16 +49,13 @@ pub fn phase_cargo_bsan(mut args: impl Iterator<Item = String>) {
         env::set_var("BSAN_PLUGIN", bsan_plugin);
     }
 
-    if find_bsan_runtime(&host_sysroot).is_none() {
+    let Some(runtime_dir) = find_bsan_runtime(&host_sysroot) else {
         show_error!(
             "failed to locate the BorrowSanitizer runtime (libbsan_rt.a) within the host sysroot."
         );
     };
-
-    if env::var_os("BSAN_RT_SYSROOT").is_none() {
-        unsafe {
-            env::set_var("BSAN_RT_SYSROOT", host_sysroot.join("lib"));
-        }
+    unsafe {
+        env::set_var("BSAN_RT_DIR", runtime_dir);
     }
 
     let targets = get_arg_flag_values("--target").collect::<Vec<_>>();

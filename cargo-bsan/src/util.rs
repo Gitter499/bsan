@@ -54,23 +54,17 @@ pub fn cargo() -> Command {
 pub fn find_bsan_plugin(sysroot: &Path) -> Option<PathBuf> {
     env::var_os("BSAN_PLUGIN").map(|o| o.into()).or_else(|| {
         let plugin = path!(sysroot / "lib" / "libbsan_plugin.so");
-        if plugin.exists() {
-            Some(plugin)
-        } else {
-            None
-        }
+        if plugin.exists() { Some(plugin) } else { None }
     })
 }
 
 pub fn find_bsan_runtime(sysroot: &Path) -> Option<PathBuf> {
     let sysroot_var = env::var_os("BSAN_RT_SYSROOT");
-    let sysroot_dir = sysroot_var.as_ref().map(PathBuf::from).unwrap_or(sysroot.join("lib"));
-    let plugin = path!(sysroot_dir / "libbsan_rt.a");
-    if plugin.exists() {
-        Some(plugin)
-    } else {
-        None
-    }
+    let binding = sysroot_var.as_ref().map(PathBuf::from);
+    let sysroot_dir = binding.as_ref().map_or(sysroot, |v| v);
+    let sysroot_lib_dir = path!(sysroot_dir / "lib");
+    let plugin = path!(&sysroot_lib_dir / "libbsan_rt.a");
+    if plugin.exists() { Some(sysroot_lib_dir) } else { None }
 }
 
 /// Returns the path to the `bsan-driver` binary
