@@ -4,11 +4,11 @@ use std::path::Path;
 use anyhow::Result;
 use path_macro::path;
 use rustc_version::VersionMeta;
-use xshell::{Shell, cmd};
+use xshell::{cmd, Shell};
 
-use crate::TOOLCHAIN_NAME;
 use crate::env::BsanConfig;
-use crate::utils::{self, PromptResult, active_toolchain, prompt_user, show_error, version_meta};
+use crate::utils::{self, active_toolchain, prompt_user, show_error, version_meta, PromptResult};
+use crate::TOOLCHAIN_NAME;
 
 pub fn setup(
     sh: &Shell,

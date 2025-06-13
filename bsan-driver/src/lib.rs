@@ -19,7 +19,7 @@ pub fn run_compiler(mut args: Vec<String>, target_crate: bool, callbacks: &mut B
         let plugin = env::var("BSAN_PLUGIN").expect("BSAN_PLUGIN environment variable not set.");
         additional_args.push(format!("-Zllvm-plugins={plugin}"));
 
-       let runtime =
+        let runtime =
             env::var_os("BSAN_RT_DIR").expect("BSAN_RT_DIR environment variable not set.");
         let rt = runtime.to_string_lossy();
         additional_args.push(format!("-L{rt}"));

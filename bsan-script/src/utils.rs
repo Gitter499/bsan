@@ -1,14 +1,14 @@
-use std::fs::{self, File, canonicalize};
+use std::fs::{self, canonicalize, File};
 use std::io;
 use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use path_macro::path;
 use rustc_version::VersionMeta;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
-use xshell::{Cmd, Shell, cmd};
+use xshell::{cmd, Cmd, Shell};
 use xz2::bufread::XzDecoder;
 
 pub fn show_error_(msg: &impl std::fmt::Display) -> ! {
