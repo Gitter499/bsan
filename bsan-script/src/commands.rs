@@ -67,7 +67,7 @@ impl Command {
 
             env.sh.set_var("BSAN_PLUGIN", plugin);
             env.sh.set_var("BSAN_DRIVER", driver);
-            env.sh.set_var("BSAN_RT_SYSROOT", runtime.parent().unwrap());
+            env.sh.set_var("BSAN_RT_DIR", runtime.parent().unwrap());
             env.sh.set_var("BSAN_SYSROOT", path!(&env.build_dir / "sysroot"));
 
             cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
