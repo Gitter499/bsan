@@ -15,7 +15,7 @@ use crate::alloc::string::ToString;
 use crate::borrow_tracker::tree::{LocationState, Tree};
 use crate::borrow_tracker::unimap::UniIndex;
 use crate::span::*;
-use crate::{AllocId, BorTag, GlobalCtx, println};
+use crate::{println, AllocId, BorTag, GlobalCtx};
 
 /// Cause of an access: either a real access or one
 /// inserted by Tree Borrows due to a reborrow or a deallocation.

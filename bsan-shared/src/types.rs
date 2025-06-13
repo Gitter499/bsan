@@ -46,6 +46,10 @@ impl Size {
 
 impl fmt::Debug for Size {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if f.alternate() { write!(f, "s{}", self.0) } else { write!(f, "size{}", self.0) }
+        if f.alternate() {
+            write!(f, "s{}", self.0)
+        } else {
+            write!(f, "size{}", self.0)
+        }
     }
 }
