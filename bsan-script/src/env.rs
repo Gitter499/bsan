@@ -351,8 +351,11 @@ impl BsanEnv {
     ) -> Result<()> {
         let BsanEnv { cargo_extra_flags, .. } = self;
         let path = path!(self.root_dir / crate_dir.as_ref());
-        cmd!(self.sh, "cargo +{TOOLCHAIN_NAME} install {cargo_extra_flags...} --path {path} --force {args...}")
-            .run()?;
+        cmd!(
+            self.sh,
+            "cargo +{TOOLCHAIN_NAME} install {cargo_extra_flags...} --path {path} --force {args...}"
+        )
+        .run()?;
         Ok(())
     }
 }

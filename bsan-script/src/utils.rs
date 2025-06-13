@@ -112,7 +112,10 @@ pub fn install_git_hooks(root_dir: &PathBuf) -> Result<()> {
         if let Ok(metadata) = std::fs::symlink_metadata(path!(&git_hooks_dir / &hook_name))
             && metadata.is_symlink()
         {
-            println!("{:?} hook is already symlinked (added). If you wish to reinstall, remove symlink from {:?}", &hook_name, &git_hooks_dir);
+            println!(
+                "{:?} hook is already symlinked (added). If you wish to reinstall, remove symlink from {:?}",
+                &hook_name, &git_hooks_dir
+            );
             return;
         }
 
