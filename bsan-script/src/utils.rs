@@ -1,14 +1,14 @@
-use std::fs::{self, canonicalize, File};
+use std::fs::{self, File, canonicalize};
 use std::io;
 use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use path_macro::path;
 use rustc_version::VersionMeta;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
-use xshell::{cmd, Cmd, Shell};
+use xshell::{Cmd, Shell, cmd};
 use xz2::bufread::XzDecoder;
 
 pub fn show_error_(msg: &impl std::fmt::Display) -> ! {
@@ -112,7 +112,10 @@ pub fn install_git_hooks(root_dir: &PathBuf) -> Result<()> {
         if let Ok(metadata) = std::fs::symlink_metadata(path!(&git_hooks_dir / &hook_name))
             && metadata.is_symlink()
         {
-            println!("{:?} hook is already symlinked (added). If you wish to reinstall, remove symlink from {:?}", &hook_name, &git_hooks_dir);
+            println!(
+                "{:?} hook is already symlinked (added). If you wish to reinstall, remove symlink from {:?}",
+                &hook_name, &git_hooks_dir
+            );
             return;
         }
 

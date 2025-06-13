@@ -359,11 +359,7 @@ impl Permission {
     /// is a protector is relevant because being protected takes priority over being
     /// interior mutable)
     pub fn new_reserved(ty_is_freeze: bool, protected: bool) -> Self {
-        if ty_is_freeze || protected {
-            Self::new_reserved_frz()
-        } else {
-            Self::new_reserved_im()
-        }
+        if ty_is_freeze || protected { Self::new_reserved_frz() } else { Self::new_reserved_im() }
     }
 
     /// Default initial permission of a reborrowed shared reference.
@@ -545,10 +541,7 @@ pub mod diagnostics {
                         // conflicted.
                         (Active, Active) => true,
                         (Frozen, Frozen) => true,
-                        (
-                            ReservedFrzConf | ReservedFrz,
-                            ReservedFrzConf | ReservedFrz,
-                        ) => true,
+                        (ReservedFrzConf | ReservedFrz, ReservedFrzConf | ReservedFrz) => true,
                         // If the error is a transition `Frozen -> Disabled`, then we don't really
                         // care whether before that was `Reserved -> Active -> Frozen` or
                         // `Frozen` directly.
@@ -563,21 +556,20 @@ pub mod diagnostics {
                         (Active, Frozen) => false,
                         (ReservedFrzConf, _) => false,
 
-                        (_, Disabled) =>
-                            unreachable!(
-                                "permission that results in Disabled should not itself be Disabled in the first place"
-                            ),
+                        (_, Disabled) => unreachable!(
+                            "permission that results in Disabled should not itself be Disabled in the first place"
+                        ),
                         // No transition has `Reserved { conflicted: false }` or `ReservedIM` as its `.to`
                         // unless it's a noop. `Cell` cannot be in its `.to` because all child
                         // accesses are a noop.
-                        (ReservedFrz | ReservedIM,  _) =>
-                            unreachable!("self is a noop transition"),
+                        (ReservedFrz | ReservedIM, _) => unreachable!("self is a noop transition"),
 
                         // Permissions only evolve in the order `Reserved -> Active -> Frozen -> Disabled`,
                         // so permissions found must be increasing in the order
                         // `self.from < self.to <= forbidden.from < forbidden.to`.
-                        (Disabled | Active | Frozen, _) =>
-                            unreachable!("permissions between self and err must be increasing"),
+                        (Disabled | Active | Frozen, _) => {
+                            unreachable!("permissions between self and err must be increasing")
+                        }
                     }
                 }
                 // We don't care because protectors evolve independently from

@@ -6,11 +6,11 @@ use anyhow::Result;
 use path_macro::path;
 use rustc_version::VersionMeta;
 use serde::{Deserialize, Serialize};
-use xshell::{cmd, Cmd, Shell};
+use xshell::{Cmd, Shell, cmd};
 
 use crate::commands::Buildable;
 use crate::utils::{active_toolchain, show_error};
-use crate::{setup, utils, TOOLCHAIN_NAME};
+use crate::{TOOLCHAIN_NAME, setup, utils};
 
 #[allow(dead_code)]
 pub struct BsanEnv {
@@ -45,11 +45,7 @@ pub enum Mode {
 
 impl Mode {
     pub fn release(release: bool) -> Self {
-        if release {
-            Mode::Release
-        } else {
-            Mode::Debug
-        }
+        if release { Mode::Release } else { Mode::Debug }
     }
 
     fn opt_level(&self) -> u32 {
@@ -225,11 +221,7 @@ impl BsanEnv {
 
     fn cargo_cmd_base(&self, cmd: &str) -> Cmd<'_> {
         let cmd = cmd!(self.sh, "cargo +{TOOLCHAIN_NAME} {cmd}").quiet();
-        if self.quiet {
-            cmd.arg("--quiet")
-        } else {
-            cmd
-        }
+        if self.quiet { cmd.arg("--quiet") } else { cmd }
     }
 
     pub fn target_binary(&self, binary_name: &str) -> PathBuf {
@@ -351,8 +343,11 @@ impl BsanEnv {
     ) -> Result<()> {
         let BsanEnv { cargo_extra_flags, .. } = self;
         let path = path!(self.root_dir / crate_dir.as_ref());
-        cmd!(self.sh, "cargo +{TOOLCHAIN_NAME} install {cargo_extra_flags...} --path {path} --force {args...}")
-            .run()?;
+        cmd!(
+            self.sh,
+            "cargo +{TOOLCHAIN_NAME} install {cargo_extra_flags...} --path {path} --force {args...}"
+        )
+        .run()?;
         Ok(())
     }
 }
