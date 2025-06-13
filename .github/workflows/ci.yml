@@ -7,10 +7,6 @@ on:
       - '**/*.toml'
       - '**/*.yml'
   pull_request:
-    paths:
-      - '**/*.rs'
-      - '**/*.toml'
-      - '**/*.yml'
     branches: [ "main" ]
   schedule:
     - cron: '0 0 * * *'
