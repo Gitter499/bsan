@@ -52,7 +52,14 @@ pub fn cargo() -> Command {
 }
 
 pub fn find_library(default: &str, sysroot: &Path, libname: &str) -> Option<PathBuf> {
-    find_library_dir(default, sysroot, libname).map(|p| p.join(libname))
+    env::var_os(default).map(|o| o.into()).or_else(|| {
+        let plugin: PathBuf = path!(sysroot / "lib" / libname);
+        if plugin.exists() {
+            Some(plugin)
+        } else {
+            None
+        }
+    })
 }
 
 pub fn find_library_dir(default: &str, sysroot: &Path, libname: &str) -> Option<PathBuf> {
