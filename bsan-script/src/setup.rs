@@ -10,6 +10,11 @@ use crate::env::BsanConfig;
 use crate::utils::{self, active_toolchain, prompt_user, show_error, version_meta, PromptResult};
 use crate::TOOLCHAIN_NAME;
 
+static FIRST_INSTALL: &str =
+    "You need to install a custom Rust toolchain (`bsan`) to build BorrowSanitizer. Continue?";
+static UPDATE: &str =
+    "Your local version of the `bsan` toolchain is out-of-date. Would you like to update it?";
+
 pub fn setup(
     sh: &Shell,
     host: &VersionMeta,
@@ -20,14 +25,20 @@ pub fn setup(
     // run the setup script, or we're in our Docker container, which has all of
     // the dependencies that we need. Once we set the active toolchain, we can
     // bail out.
-    if let Ok(meta) = version_meta(sh, TOOLCHAIN_NAME)
-        && Some(&config.sha) == host.commit_hash.as_ref()
-    {
-        if active_toolchain()? != TOOLCHAIN_NAME {
-            cmd!(sh, "rustup override set {TOOLCHAIN_NAME}").run()?;
+    let prompt_text = if let Ok(meta) = version_meta(sh, TOOLCHAIN_NAME) {
+        if let Some(ref commit_hash) = meta.commit_hash
+            && commit_hash == &config.sha
+        {
+            if active_toolchain()? != TOOLCHAIN_NAME {
+                cmd!(sh, "rustup override set {TOOLCHAIN_NAME}").run()?;
+            }
+            return Ok(meta);
+        } else {
+            UPDATE
         }
-        return Ok(meta);
-    }
+    } else {
+        FIRST_INSTALL
+    };
 
     // First, check if the current platform is supported.
     let current_target = &host.host;
@@ -44,9 +55,7 @@ pub fn setup(
 
     // If we've passed these checks, then let's do the expensive step of
     // downloading and installing our custom toolchain.
-    if let Some(PromptResult::Yes) = prompt_user(
-        "You need to install a custom Rust toolchain (`bsan`) to build BorrowSanitizer. Continue?",
-    )? {
+    if let Some(PromptResult::Yes) = prompt_user(prompt_text)? {
         toolchain(sh, host, config, toolchain_dir)
     } else {
         std::process::exit(0);
