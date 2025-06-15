@@ -54,7 +54,11 @@ jobs:
             images: ${{ env.REGISTRY_IMAGE }}
 
         - name: Build base image
-          run: docker build -f .devcontainer/Dockerfile.dev --tag dev:latest . 
+          run: |
+            docker build \
+              -f .devcontainer/Dockerfile.dev \
+              --tag dev:local . \
+              --platform=${{ matrix.config.platform }} \
 
         - name: Login
           uses: docker/login-action@v3
@@ -77,9 +81,10 @@ jobs:
             tags: ${{ env.REGISTRY_IMAGE }}
             provenance: false
             sbom: false
+            pull: false
             outputs: type=image,push-by-digest=true,name-canonical=true,push=true
             build-args: |
-              DEV_IMAGE=dev:latest
+              DEV_IMAGE=dev:local
 
         - name: Export digest
           run: |
