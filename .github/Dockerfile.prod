@@ -1,0 +1,9 @@
+ARG DEV_IMAGE
+FROM $MYAPP_IMAGE
+FROM $DEV_IMAGE as base
+COPY . . 
+RUN xb install
+
+FROM $DEV_IMAGE as final
+COPY --from=base /root/.rustup/toolchains/bsan /root/.rustup/toolchains/bsan
+RUN rustup default bsan && rustc -vV
