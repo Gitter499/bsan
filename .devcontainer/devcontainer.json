@@ -1,7 +1,7 @@
 {
 	"name": "BorrowSanitizer",
 	"build": {
-		"dockerfile": "Dockerfile"
+		"dockerfile": "Dockerfile.dev"
 	},
 	"remoteEnv": {
 		"PATH": "${containerEnv:PATH}:${containerWorkspaceFolder}"
