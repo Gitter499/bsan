@@ -10,7 +10,7 @@ set -e
 if [ $EXIT_CODE = 0 ]; then
   TOOLCHAIN=bsan
 fi
-cargo +bsan build $CARGO_EXTRA_FLAGS --manifest-path "$ROOT_DIR"/bsan-script/Cargo.toml \
+cargo +$TOOLCHAIN build $CARGO_EXTRA_FLAGS --manifest-path "$ROOT_DIR"/bsan-script/Cargo.toml \
   -Zroot-dir="$ROOT_DIR" \
   -q --target-dir "$BSAN_SCRIPT_TARGET_DIR" $MESSAGE_FORMAT || \
   ( echo "Failed to build bsan-script."; exit 1 )
