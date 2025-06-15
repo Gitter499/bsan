@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-set -e
 # We want to call the binary directly, so we need to know where it ends up.
 ROOT_DIR="$(dirname "$0")"
 BSAN_SCRIPT_TARGET_DIR="$ROOT_DIR"/bsan-script/target
 # We need a nightly toolchain, for `-Zroot-dir`.
-cargo +nightly build $CARGO_EXTRA_FLAGS --manifest-path "$ROOT_DIR"/bsan-script/Cargo.toml \
+TOOLCHAIN=nightly
+rustup default bsan > /dev/null 2>&1 
+EXIT_CODE=$?
+set -e
+if [ $EXIT_CODE = 0 ]; then
+  TOOLCHAIN=bsan
+fi
+cargo +$TOOLCHAIN build $CARGO_EXTRA_FLAGS --manifest-path "$ROOT_DIR"/bsan-script/Cargo.toml \
   -Zroot-dir="$ROOT_DIR" \
   -q --target-dir "$BSAN_SCRIPT_TARGET_DIR" $MESSAGE_FORMAT || \
   ( echo "Failed to build bsan-script."; exit 1 )
