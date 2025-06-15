@@ -1,9 +1,9 @@
-ARG DEV_IMAGE
-FROM $MYAPP_IMAGE
-FROM $DEV_IMAGE as base
+ARG DEV_IMAGE=dev:latest
+FROM $DEV_IMAGE AS base
 COPY . . 
-RUN xb install
+RUN ./xb install
 
-FROM $DEV_IMAGE as final
+FROM $DEV_IMAGE AS final
 COPY --from=base /root/.rustup/toolchains/bsan /root/.rustup/toolchains/bsan
+COPY --from=base /root/.cargo/ /root/.cargo
 RUN rustup default bsan && rustc -vV
