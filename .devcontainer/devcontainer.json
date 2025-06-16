@@ -3,7 +3,7 @@
 	"build": {
 		"dockerfile": "Dockerfile",
 		"args": {
-			"TAG": "sha-140352f"
+			"TAG": "sha-b55ccbf"
 		},
 		"target": "image-dev"
 	},
