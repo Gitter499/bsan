@@ -50,10 +50,9 @@ jobs:
 
         - name: Get base image tag from config
           id: lookup_tag
-          uses: mikefarah/yq@master
-          with:
-            cmd: yq '.tag' 'config.yml'
-          
+          run: |
+            echo "tag=$(jq '.build.args.TAG' .devcontainer/devcontainer.json)" >> '$GITHUB_OUTPUT'
+
         - name: Docker meta
           id: meta
           uses: docker/metadata-action@v5
@@ -85,7 +84,7 @@ jobs:
             pull: false
             outputs: type=image,push-by-digest=true,name-canonical=true,push=true
             build-args: |
-              TAG=${{ steps.lookup_tag.outputs.result }}
+              TAG=${{ steps.lookup_tag.outputs.tag }}
               
         - name: Export digest
           run: |
