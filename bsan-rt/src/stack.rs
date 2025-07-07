@@ -36,6 +36,11 @@ impl<T> Stack<T> {
         Self { elems, frame_top, prev_frame_len_slot: ptr::null_mut(), curr_frame_len: 0 }
     }
 
+    pub fn push(&mut self, elem: T) {
+        let slot = self.push_elems(1);
+        unsafe { (*slot.as_ptr()).write(elem) };
+    }
+
     #[inline]
     pub fn push_elems(&mut self, elems: usize) -> NonNull<MaybeUninit<T>> {
         let frame_top = self.frame_top;
@@ -103,6 +108,23 @@ impl<T> Stack<T> {
         };
 
         self.curr_frame_len = unsafe { *self.prev_frame_len_slot };
+    }
+
+    #[inline]
+    unsafe fn frame_bottom(&self) -> *mut T {
+        unsafe {
+            utils::align_up::<C, T>(NonNull::new_unchecked(self.prev_frame_len_slot)).as_ptr()
+        }
+    }
+
+    pub unsafe fn frame(&self) -> &[T] {
+        unsafe { core::slice::from_raw_parts(self.frame_bottom(), self.curr_frame_len as usize) }
+    }
+
+    pub unsafe fn frame_mut(&mut self) -> &mut [T] {
+        unsafe {
+            core::slice::from_raw_parts_mut(self.frame_bottom(), self.curr_frame_len as usize)
+        }
     }
 }
 

@@ -146,7 +146,7 @@ impl fmt::Debug for BorTag {
 /// and a borrow tag. We also include a pointer to the "lock" location for the allocation,
 /// which contains all other metadata used to detect undefined behavior.
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(private_interfaces)]
 pub struct Provenance {
     pub alloc_id: AllocId,
@@ -179,6 +179,14 @@ impl Provenance {
             bor_tag: BorTag::new(0),
             alloc_info: core::ptr::null_mut(),
         }
+    }
+
+    fn is_wildcard(&self) -> bool {
+        *self == Provenance::wildcard()
+    }
+
+    fn is_null(&self) -> bool {
+        *self == Provenance::null()
     }
 }
 
