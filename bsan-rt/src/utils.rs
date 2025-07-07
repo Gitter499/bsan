@@ -1,6 +1,7 @@
 use core::ffi::c_void;
 use core::mem::{self, MaybeUninit};
 use core::num::{NonZero, NonZeroUsize};
+use core::ops::Div;
 use core::ptr::{self, NonNull};
 
 use libc::{rlimit, RLIMIT_STACK, _SC_PAGESIZE};
@@ -12,6 +13,22 @@ use crate::{BorTag, Provenance};
 pub struct Sizes {
     pub page: NonZero<usize>,
     pub stack: NonZero<usize>,
+}
+
+impl Sizes {
+    pub fn page_of<T>(&self) -> NonZero<usize>
+    where
+        T: Sized,
+    {
+        NonZero::new(self.page.get().div(mem::size_of::<T>())).expect("Page element count is 0.")
+    }
+
+    pub fn stack_of<T>(&self) -> NonZero<usize>
+    where
+        T: Sized,
+    {
+        NonZero::new(self.stack.get().div(mem::size_of::<T>())).expect("Stack element count is 0.")
+    }
 }
 
 impl Default for Sizes {

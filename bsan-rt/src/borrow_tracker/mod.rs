@@ -126,6 +126,8 @@ impl<'a> BorrowTracker<'a> {
             }));
         }
 
+        if let Some(kind) = retag_info.protector_kind {}
+
         // TODO: Pass this in
         let mut perms_map = RangeMap::new_in(
             Size::from_bytes(unsafe { (*self.alloc_info).size }),

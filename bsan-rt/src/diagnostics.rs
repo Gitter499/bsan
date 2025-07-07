@@ -64,7 +64,6 @@ pub struct Event {
     pub transition: PermTransition,
     /// Kind of the access that triggered this event.
     pub access_cause: AccessCause,
-
     /// Relative position of the tag to the one used for the access.
     pub is_foreign: bool,
     /// User-visible range of the access.
@@ -483,7 +482,6 @@ impl DisplayFmt {
         protector.map_or("", |p| match *p {
             ProtectorKind::WeakProtector => " Weakly protected",
             ProtectorKind::StrongProtector => " Strongly protected",
-            ProtectorKind::NoProtector => " Not protected",
         })
     }
 }

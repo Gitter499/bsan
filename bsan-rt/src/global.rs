@@ -12,6 +12,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
 use block::*;
+use bsan_shared::ProtectorKind;
 use hashbrown::{DefaultHashBuilder, HashMap};
 use libc_print::std_name::*;
 use rustc_hash::FxBuildHasher;
@@ -33,10 +34,14 @@ use crate::*;
 /// of unsafety throughout the library.
 #[derive(Debug)]
 pub struct GlobalCtx {
+    /// The set of allocation and deallocation functions.
     hooks: BsanHooks,
+    /// Counters for IDs assigned to allocations, threads, and borrow tags.
     next_alloc_id: AtomicUsize,
     next_thread_id: AtomicUsize,
     next_bor_tag: AtomicUsize,
+    root_ptr_tags: Mutex<BHashMap<AllocId, BorTag>>,
+    protected_tags: Mutex<BHashMap<BorTag, ProtectorKind>>,
     alloc_metadata_map: BlockAllocator<AllocInfo>,
     shadow_heap: ShadowHeap<Provenance>,
     pub sizes: Sizes,
@@ -46,36 +51,23 @@ impl GlobalCtx {
     /// Creates a new instance of `GlobalCtx` using the given `BsanHooks`.
     /// This function will also initialize our shadow heap
     fn new(hooks: BsanHooks) -> Self {
-        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
-        let alloc_metadata_size = mem::size_of::<AllocInfo>();
-        debug_assert!(0 < alloc_metadata_size && alloc_metadata_size <= page_size);
-
-        //  TODO: allocate a page of `AllocInfo` objects.
-        //  let num_elements = NonZeroUsize::new(page_size / mem::size_of::<AllocInfo>()).unwrap();
-
-        let num_elements = NonZeroUsize::new(1024).unwrap();
-        let block = Block::new(&hooks, num_elements);
+        let sizes = Sizes::default();
+        let block = Block::new(&hooks, sizes.page_of::<AllocInfo>());
         Self {
             hooks,
             next_alloc_id: AtomicUsize::new(AllocId::min().get()),
             next_thread_id: AtomicUsize::new(0),
             next_bor_tag: AtomicUsize::new(0),
+            root_ptr_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
+            protected_tags: Mutex::new(BHashMap::new_in(hooks.alloc)),
             alloc_metadata_map: BlockAllocator::new(block),
             shadow_heap: ShadowHeap::new(&hooks),
-            sizes: Sizes::default(),
+            sizes,
         }
     }
 
     pub fn shadow_heap(&self) -> &ShadowHeap<Provenance> {
         &self.shadow_heap
-    }
-
-    // TODO: Discuss BorTag implementation
-    // Gitter499: I think it makes sense to keep track of the borrow tags at a global level
-    // Though I could see moving this responsibility completely to the tree
-    pub fn new_bor_tag(&self) -> BorTag {
-        let id = self.next_bor_tag.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        BorTag(id)
     }
 
     pub fn hooks(&self) -> &BsanHooks {
@@ -119,6 +111,14 @@ impl GlobalCtx {
     pub fn new_alloc_id(&self) -> AllocId {
         let id = self.next_alloc_id.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         AllocId::new(id)
+    }
+
+    // TODO: Discuss BorTag implementation
+    // Gitter499: I think it makes sense to keep track of the borrow tags at a global level
+    // Though I could see moving this responsibility completely to the tree
+    pub fn new_bor_tag(&self) -> BorTag {
+        let id = self.next_bor_tag.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        BorTag(id)
     }
 }
 
@@ -174,30 +174,6 @@ impl core::fmt::Write for BVec<u8> {
     }
 }
 
-/// A thin wrapper around `VecDeque` that uses `GlobalCtx` as its allocator
-#[derive(Debug, Clone)]
-pub struct BVecDeque<T>(VecDeque<T, BsanAllocHooks>);
-
-impl<T> Deref for BVecDeque<T> {
-    type Target = VecDeque<T, BsanAllocHooks>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T> DerefMut for BVecDeque<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl<T> BVecDeque<T> {
-    fn new(ctx: &GlobalCtx) -> Self {
-        unsafe { Self(VecDeque::new_in(ctx.allocator())) }
-    }
-}
-
 /// The seed for the random state of the hash function for `BHashMap`.
 /// Equal to the decimal encoding of the ascii for "BSAN".
 static BSAN_HASH_SEED: usize = 1112752462;
@@ -220,8 +196,8 @@ impl<K, V> DerefMut for BHashMap<K, V> {
 }
 
 impl<K, V> BHashMap<K, V> {
-    fn new(ctx: &GlobalCtx) -> Self {
-        unsafe { Self(HashMap::with_hasher_in(FxBuildHasher, ctx.allocator())) }
+    fn new_in(hooks: BsanAllocHooks) -> Self {
+        unsafe { Self(HashMap::with_hasher_in(FxBuildHasher, hooks)) }
     }
 }
 

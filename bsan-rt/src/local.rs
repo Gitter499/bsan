@@ -19,13 +19,17 @@ impl LocalCtx {
         Self { thread_id, provenance, protected_tags }
     }
 
-    /// # Safety
     #[inline]
-    pub unsafe fn push_frame(&mut self, elems: usize) -> NonNull<MaybeUninit<Provenance>> {
+    pub fn push_frame(&mut self, elems: usize) -> NonNull<MaybeUninit<Provenance>> {
         unsafe {
             self.protected_tags.push_frame();
             self.provenance.push_frame_with(elems)
         }
+    }
+
+    #[inline]
+    pub fn add_protected_tag(&mut self, tag: BorTag) {
+        self.protected_tags.push(tag);
     }
 }
 

@@ -11,12 +11,12 @@ use super::helpers::{AccessKind, AccessRelatedness};
 pub struct RetagInfo {
     pub size: usize,
     pub perm_kind: Permission,
-    pub protector_kind: ProtectorKind,
+    pub protector_kind: Option<ProtectorKind>,
 }
 
 impl RetagInfo {
     #[inline]
-    pub fn new(size: usize, perm_kind: Permission, protector_kind: ProtectorKind) -> Self {
+    pub fn new(size: usize, perm_kind: Permission, protector_kind: Option<ProtectorKind>) -> Self {
         Self { size, perm_kind, protector_kind }
     }
 
@@ -32,14 +32,13 @@ impl RetagInfo {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProtectorKind {
-    NoProtector,
     /// Protected against aliasing violations from other pointers.
     ///
     /// Items protected like this cause UB when they are invalidated, *but* the pointer itself may
     /// still be used to issue a deallocation.
     ///
     /// This is required for LLVM IR pointers that are `noalias` but *not* `dereferenceable`.
-    WeakProtector,
+    WeakProtector = 1,
 
     /// Protected against any kind of invalidation.
     ///
@@ -47,12 +46,16 @@ pub enum ProtectorKind {
     /// This is strictly stronger protection than `WeakProtector`.
     ///
     /// This is required for LLVM IR pointers that are `dereferenceable` (and also allows `noalias`).
-    StrongProtector,
+    StrongProtector = 2,
 }
 
 impl ProtectorKind {
-    unsafe fn from_raw(protector_kind: u8) -> Self {
-        unsafe { core::mem::transmute::<u8, ProtectorKind>(protector_kind) }
+    unsafe fn from_raw(protector_kind: u8) -> Option<Self> {
+        if protector_kind == 0 {
+            None
+        } else {
+            Some(unsafe { core::mem::transmute::<u8, ProtectorKind>(protector_kind) })
+        }
     }
 }
 
