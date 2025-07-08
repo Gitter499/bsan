@@ -53,7 +53,7 @@ Nearly every subcommand can be used this way.
 
 After making a change, you should run all of our CI steps locally using:
 ```
-xb ui
+xb ci
 ```
 
 This will place our binaries into Cargo's [home directory](https://doc.rust-lang.org/cargo/guide/cargo-home.html) (`$HOME/.cargo`). You will need to have `bsan` set as the active toolchain (e.g. `rustup default bsan`) for our tool to work. 
