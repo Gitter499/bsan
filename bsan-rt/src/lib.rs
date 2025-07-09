@@ -285,22 +285,23 @@ unsafe extern "C" fn __bsan_deinit() {
 // TODO: Retag is often called more than __bsan_alloc, should look into where we should init the tree
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_retag(
+    object_addr: *const c_void,
     prov: *mut Provenance,
     size: usize,
-    perm_kind: u8,
+    perm_kind: u16,
     protector_kind: u8,
-    object_addr: *const c_void,
+    access_kind: u8,
 ) {
-    let retag_info = unsafe { RetagInfo::from_raw(size, perm_kind, protector_kind) };
+    let retag_info = unsafe { RetagInfo::from_raw(size, perm_kind, protector_kind, access_kind) };
 
     // Get the global context (used for the allocator for now)
     let ctx = unsafe { global_ctx() };
-
+    let local_ctx = unsafe { local_ctx_mut() };
     // TODO: Handle these results with proper errors
-    let bt = unsafe { BorrowTracker::new(prov, ctx, object_addr).unwrap() };
+    let bt = unsafe { BorrowTracker::new(ctx, prov, object_addr).unwrap() };
 
     // Now we can assume tree is initialized
-    bt.retag(&retag_info).unwrap();
+    bt.retag(local_ctx, &retag_info).unwrap();
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -309,7 +310,7 @@ extern "C" fn __bsan_read(prov: *const Provenance, addr: *const c_void, access_s
     // Assuming root tag has been initialized in the tree
     let ctx = unsafe { global_ctx() };
 
-    let bt = unsafe { BorrowTracker::new(prov, ctx, addr).unwrap() };
+    let bt = unsafe { BorrowTracker::new(ctx, prov, addr).unwrap() };
 
     let offset = unsafe { (*(*prov).alloc_info).base_offset(addr) };
 
@@ -327,7 +328,7 @@ extern "C" fn __bsan_write(prov: *const Provenance, addr: *const c_void, access_
 
     let ctx = unsafe { global_ctx() };
 
-    let bt = unsafe { BorrowTracker::new(prov, ctx, addr).unwrap() };
+    let bt = unsafe { BorrowTracker::new(ctx, prov, addr).unwrap() };
 
     let offset = unsafe { (*(*prov).alloc_info).base_offset(addr) };
     bt.access(
@@ -384,8 +385,12 @@ unsafe extern "C" fn __bsan_push_frame(elems: usize) -> *mut MaybeUninit<Provena
 /// Pops a shadow stack frame, deallocating all shadow allocations created by `bsan_alloc_stack`
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_pop_frame() {
+    let global_ctx = unsafe { global_ctx() };
     let local_ctx = unsafe { local_ctx_mut() };
     unsafe {
+        for (id, tag) in local_ctx.protected_tags.frame() {
+            global_ctx.remove_protected_tag(*tag);
+        }
         local_ctx.provenance.pop_frame();
         local_ctx.protected_tags.pop_frame();
     }
@@ -450,7 +455,7 @@ extern "C" fn __bsan_extend_frame(num_elems: usize) {
 extern "C" fn __bsan_dealloc(prov: *mut Provenance, object_addr: *const c_void) {
     // Assuming root tag has been initialized in the tree
     let ctx = unsafe { global_ctx() };
-    let mut bt = unsafe { BorrowTracker::new(prov, ctx, object_addr).unwrap() };
+    let mut bt = unsafe { BorrowTracker::new(ctx, prov, object_addr).unwrap() };
     match bt.dealloc(object_addr) {
         Ok(()) => {}
         Err(e) => {
@@ -477,6 +482,7 @@ mod test {
 
     fn with_init(unit_test: fn()) {
         unsafe { __bsan_init() };
+
         unit_test();
         unsafe { __bsan_deinit() };
     }

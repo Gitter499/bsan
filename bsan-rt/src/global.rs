@@ -52,7 +52,7 @@ impl GlobalCtx {
     /// This function will also initialize our shadow heap
     fn new(hooks: BsanHooks) -> Self {
         let sizes = Sizes::default();
-        let block = Block::new(&hooks, sizes.page_of::<AllocInfo>());
+        let block = Block::new(&hooks, unsafe { NonZero::new_unchecked(1024) });
         Self {
             hooks,
             next_alloc_id: AtomicUsize::new(AllocId::min().get()),
@@ -119,6 +119,21 @@ impl GlobalCtx {
     pub fn new_bor_tag(&self) -> BorTag {
         let id = self.next_bor_tag.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         BorTag(id)
+    }
+
+    pub fn add_protected_tag(&self, bor_tag: BorTag, protector_kind: ProtectorKind) {
+        let mut tag_map = self.protected_tags.lock();
+        tag_map.insert(bor_tag, protector_kind);
+    }
+
+    pub fn remove_protected_tag(&self, bor_tag: BorTag) {
+        let mut tag_map = self.protected_tags.lock();
+        tag_map.remove(&bor_tag);
+    }
+
+    pub fn get_protector_kind(&self, bor_tag: BorTag) -> Option<ProtectorKind> {
+        let mut tag_map = self.protected_tags.lock();
+        tag_map.get(&bor_tag).copied()
     }
 }
 
