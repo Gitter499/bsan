@@ -1,4 +1,5 @@
 #![cfg_attr(not(test), no_std)]
+#![allow(unused)]
 #![allow(internal_features)]
 #![allow(unused)]
 #![warn(clippy::transmute_ptr_to_ptr)]
