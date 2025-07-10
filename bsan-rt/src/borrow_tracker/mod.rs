@@ -29,6 +29,10 @@ impl BorrowTracker {
         unsafe { (*self.prov.alloc_info).tree_lock.lock() }
     }
 
+    fn lock_mut(&mut self) -> MutexGuard<'_, Option<Tree<BsanAllocHooks>>> {
+        unsafe { (*self.prov.alloc_info).tree_lock.lock() }
+    }
+
     /// # Safety
     /// Takes in provenance pointer that is checked via debug_asserts
     pub fn new(
@@ -75,14 +79,14 @@ impl BorrowTracker {
         _local_ctx: &mut LocalCtx,
         retag_info: RetagInfo,
     ) -> BorsanResult<BorTag> {
-        let new_tag = global_ctx.new_borrow_tag();
-        let is_protected = retag_info.perm.protector_kind.is_some();
-        let requires_access = retag_info.perm.access_kind.is_some();
-
         // Tree is assumed to be initialized
         let mut lock = self.lock();
         let tree = unsafe { lock.as_mut().unwrap_unchecked() };
         let parent_tag = self.prov.bor_tag;
+        let new_tag = global_ctx.new_borrow_tag();
+
+        let is_protected = retag_info.perm.protector_kind.is_some();
+        let requires_access = retag_info.perm.access_kind.is_some();
 
         if let Some(protect) = retag_info.perm.protector_kind {
             // We register the protection in two different places.
@@ -178,20 +182,25 @@ impl BorrowTracker {
     }
 
     pub fn dealloc(&mut self, global_ctx: &GlobalCtx) -> BorsanResult<()> {
-        let mut lock = self.lock();
-        let tree = unsafe { lock.as_mut().unwrap_unchecked() };
+        let prov = self.prov;
+        let range = self.range;
+
+        let mut lock = self.lock_mut();
+        let mut tree = unsafe { lock.take().unwrap() };
+        drop(lock);
 
         tree.dealloc(
-            self.prov.bor_tag,
-            self.range,
+            prov.bor_tag,
+            range,
             global_ctx,
-            self.prov.alloc_id,
+            prov.alloc_id,
             // TODO: Replace with actual span
             Span::new(),
             global_ctx.allocator(),
         )?;
 
-        unsafe { drop(ptr::replace(self.prov.alloc_info, AllocInfo::default())) }
+        let info = unsafe { &mut *self.prov.alloc_info };
+        info.alloc_id = AllocId::invalid();
         unsafe { global_ctx.deallocate_lock_location(self.prov.alloc_info) };
         Ok(())
     }
