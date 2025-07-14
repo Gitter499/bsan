@@ -28,6 +28,7 @@ use core::{fmt, ptr};
 
 use backtrace::Backtrace;
 use bsan_shared::{AccessKind, RetagInfo, Size};
+use errors::BtOperation;
 use libc_print::std_name::*;
 use spin::Mutex;
 
@@ -104,6 +105,15 @@ impl AllocId {
 
     pub const fn min() -> Self {
         AllocId(3)
+    }
+}
+
+impl Default for AllocId {
+    /// By Default, `AllocId` is invalid
+    // This might change in the future, updated to reflect
+    // the behavior in `BorrowTracker::dealloc`
+    fn default() -> Self {
+        Self::invalid()
     }
 }
 
