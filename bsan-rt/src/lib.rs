@@ -555,6 +555,8 @@ unsafe extern "C" fn __bsan_pop_frame() {
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_expose_tag(alloc_id: AllocId, bor_tag: BorTag, alloc_info: *mut AllocInfo) {}
 
+// Code is more readable with explicit return
+#[allow(clippy::needless_return)]
 #[unsafe(no_mangle)]
 extern "C" fn __bsan_debug_assert_null(
     alloc_id: AllocId,
@@ -563,6 +565,10 @@ extern "C" fn __bsan_debug_assert_null(
 ) {
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
+<<<<<<< HEAD
+=======
+
+>>>>>>> 80ac1ec (fix(#49): Fixed clippy warnings)
     if prov != Provenance::null() {
         crate::eprintln!("Expected null provenance, got {prov:?}");
         global_ctx.exit(1);
@@ -577,6 +583,10 @@ extern "C" fn __bsan_debug_assert_wildcard(
 ) {
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
+<<<<<<< HEAD
+=======
+
+>>>>>>> 80ac1ec (fix(#49): Fixed clippy warnings)
     if prov != Provenance::wildcard() {
         crate::eprintln!("Expected wildcard provenance, got {prov:?}");
         global_ctx.exit(1);
@@ -602,8 +612,13 @@ extern "C" fn __bsan_debug_assert_invalid(
 ) {
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
+<<<<<<< HEAD
     if prov == Provenance::null() || prov == Provenance::wildcard() {
     } else {
+=======
+
+    if !(prov == Provenance::null() || prov == Provenance::wildcard()) {
+>>>>>>> 80ac1ec (fix(#49): Fixed clippy warnings)
         global_ctx.exit(1);
     }
 }
