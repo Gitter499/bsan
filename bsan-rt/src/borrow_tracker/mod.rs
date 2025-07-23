@@ -56,19 +56,18 @@ impl BorrowTracker {
                 throw_ub!(UBInfo::UseAfterFree(Span::new(), prov.alloc_id))
             }
 
-            let (alloc_size, root_base_addr) =
+            let (alloc_size, base_addr) =
                 unsafe { ((*prov.alloc_info).size, (*prov.alloc_info).base_addr.base_addr) };
 
             let access_size = access_size.unwrap_or(alloc_size);
-            let offset = start.addr().wrapping_sub(root_base_addr.addr());
-            if start.addr() < root_base_addr.addr() || (offset + access_size > alloc_size) {
+            let relative_offset = start.addr().wrapping_sub(base_addr.addr());
+            if start.addr() < base_addr.addr() || (relative_offset + access_size > alloc_size) {
                 throw_ub!(UBInfo::AccessOutOfBounds(Span::new(), prov, start, access_size))
             }
 
-            let start = Size::from_bytes(offset);
+            let start = Size::from_bytes(relative_offset);
             let size = Size::from_bytes(access_size);
             let range = AllocRange { start, size };
-
             Ok(Some(Self { prov, range }))
         }
     }
@@ -82,12 +81,13 @@ impl BorrowTracker {
         // Tree is assumed to be initialized
         let mut lock = self.lock();
         let tree = unsafe { lock.as_mut().unwrap_unchecked() };
+
         let parent_tag = self.prov.bor_tag;
         let new_tag = global_ctx.new_borrow_tag();
 
         let is_protected = retag_info.perm.protector_kind.is_some();
         let requires_access = retag_info.perm.access_kind.is_some();
-        
+
         if let Some(protect) = retag_info.perm.protector_kind {
             // We register the protection in two different places.
             // This makes creating a protector slower, but checking whether a tag
@@ -159,6 +159,7 @@ impl BorrowTracker {
         };
 
         tree.new_child(child_params);
+
         Ok(new_tag)
     }
 

@@ -565,10 +565,6 @@ extern "C" fn __bsan_debug_assert_null(
 ) {
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-<<<<<<< HEAD
-=======
-
->>>>>>> 80ac1ec (fix(#49): Fixed clippy warnings)
     if prov != Provenance::null() {
         crate::eprintln!("Expected null provenance, got {prov:?}");
         global_ctx.exit(1);
@@ -583,10 +579,6 @@ extern "C" fn __bsan_debug_assert_wildcard(
 ) {
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-<<<<<<< HEAD
-=======
-
->>>>>>> 80ac1ec (fix(#49): Fixed clippy warnings)
     if prov != Provenance::wildcard() {
         crate::eprintln!("Expected wildcard provenance, got {prov:?}");
         global_ctx.exit(1);
@@ -612,13 +604,8 @@ extern "C" fn __bsan_debug_assert_invalid(
 ) {
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-<<<<<<< HEAD
-    if prov == Provenance::null() || prov == Provenance::wildcard() {
-    } else {
-=======
 
     if !(prov == Provenance::null() || prov == Provenance::wildcard()) {
->>>>>>> 80ac1ec (fix(#49): Fixed clippy warnings)
         global_ctx.exit(1);
     }
 }
@@ -741,12 +728,4 @@ mod test {
     // TODO: Implement this test
     // #[test]
     // fn bsan_aliasing_violation() {}
-}
-
-#[cfg(not(test))]
-#[panic_handler]
-fn panic(info: &PanicInfo<'_>) -> ! {
-    crate::eprintln!("The BorrowSanitizer runtime panicked!");
-    crate::eprintln!("{info}");
-    core::intrinsics::abort()
 }
