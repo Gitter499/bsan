@@ -81,7 +81,6 @@ impl BorrowTracker {
         // Tree is assumed to be initialized
         let mut lock = self.lock();
         let tree = unsafe { lock.as_mut().unwrap_unchecked() };
-
         let parent_tag = self.prov.bor_tag;
         let new_tag = global_ctx.new_borrow_tag();
 
