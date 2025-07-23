@@ -17,8 +17,8 @@ The easiest way to try BorrowSanitizer is inside a Docker container. Our image s
 
 |   **Platform**    |         **Target**            | **Description**            |
 |-------------------|-------------------------------|----------------------------|
-|   `linux/amd64`   | `aarch64-apple-darwin`        |   ARM64 macOS (M-series)   |
-|   `linux/arm64`   |  `x86_64-unknown-linux-gnu`   |    X86 Linux               |
+|   `linux/amd64`   | `aarch64-unknown-linux-gnu`   |ARM64 Linux                 |
+|   `linux/arm64`   |  `x86_64-unknown-linux-gnu`   |X86 Linux                   |
 
 First, pull our [latest image](https://github.com/BorrowSanitizer/bsan/pkgs/container/bsan) from GitHub's container registry.
 ```
