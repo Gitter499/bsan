@@ -1,5 +1,4 @@
 // Components in this library were ported from Miri and then modified by our team.
-#![feature(yeet_expr)]
 use core::ffi::c_void;
 use core::ptr;
 

@@ -6,8 +6,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::AtomicUsize;
 
 use bsan_shared::ProtectorKind;
-use hashbrown::HashMap;
-use rustc_hash::FxBuildHasher;
+use hashbrown::{DefaultHashBuilder, HashMap};
 
 use crate::errors::ErrorInfo;
 use crate::memory::hooks::{BsanAllocHooks, BsanHooks};
@@ -176,10 +175,10 @@ impl core::fmt::Write for BVec<u8> {
 
 /// A thin wrapper around `HashMap` that uses `GlobalCtx` as its allocator
 #[derive(Debug, Clone)]
-pub struct BHashMap<K, V>(HashMap<K, V, FxBuildHasher, BsanAllocHooks>);
+pub struct BHashMap<K, V>(HashMap<K, V, DefaultHashBuilder, BsanAllocHooks>);
 
 impl<K, V> Deref for BHashMap<K, V> {
-    type Target = HashMap<K, V, FxBuildHasher, BsanAllocHooks>;
+    type Target = HashMap<K, V, DefaultHashBuilder, BsanAllocHooks>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -193,7 +192,7 @@ impl<K, V> DerefMut for BHashMap<K, V> {
 
 impl<K, V> BHashMap<K, V> {
     fn new_in(hooks: BsanAllocHooks) -> Self {
-        Self(HashMap::with_hasher_in(FxBuildHasher, hooks))
+        Self(HashMap::with_hasher_in(foldhash::fast::RandomState::default(), hooks))
     }
 }
 
