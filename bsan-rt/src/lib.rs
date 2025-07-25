@@ -729,3 +729,11 @@ mod test {
     // #[test]
     // fn bsan_aliasing_violation() {}
 }
+
+#[cfg(not(test))]
+#[panic_handler]
+fn panic(info: &PanicInfo<'_>) -> ! {
+    crate::eprintln!("The BorrowSanitizer runtime panicked!");
+    crate::eprintln!("{info}");
+    core::intrinsics::abort()
+}
