@@ -534,8 +534,12 @@ unsafe extern "C" fn __bsan_shadow_store_vector(
 
 /// Pushes a shadow stack frame
 #[unsafe(no_mangle)]
+<<<<<<< HEAD
 unsafe extern "C" fn __bsan_push_frame() {
     let ctx = unsafe { global_ctx() };
+=======
+unsafe extern "C" fn __bsan_push_frame(args: usize) {
+>>>>>>> 6192f55 (Wipe TLS immediately after encountering a maybe-uninstrumented function.)
     let local_ctx = unsafe { local_ctx_mut() };
     local_ctx.push_frame().unwrap_or_else(|info| ctx.handle_error(info));
 }

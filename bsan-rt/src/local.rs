@@ -4,10 +4,14 @@ use crate::errors::BorsanResult;
 use crate::memory::Stack;
 use crate::*;
 
+<<<<<<< HEAD
 #[thread_local]
 pub static LOCAL_CTX: UnsafeCell<MaybeUninit<LocalCtx>> = UnsafeCell::new(MaybeUninit::uninit());
 
 static TLS_SIZE: usize = 100;
+=======
+pub static TLS_SIZE: usize = 100;
+>>>>>>> 6192f55 (Wipe TLS immediately after encountering a maybe-uninstrumented function.)
 
 #[thread_local]
 #[unsafe(no_mangle)]
@@ -16,6 +20,14 @@ pub static mut __BSAN_RETVAL_TLS: [Provenance; TLS_SIZE] = [Provenance::null(); 
 #[thread_local]
 #[unsafe(no_mangle)]
 pub static mut __BSAN_PARAM_TLS: [Provenance; TLS_SIZE] = [Provenance::null(); TLS_SIZE];
+
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_CALLED_FROM_EXTERN: bool = false;
+
+#[thread_local]
+#[unsafe(no_mangle)]
+pub static mut __BSAN_RETURNING_TO_EXTERN: bool = false;
 
 #[derive(Debug)]
 pub struct LocalCtx {
