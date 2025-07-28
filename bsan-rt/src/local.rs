@@ -4,14 +4,10 @@ use crate::errors::BorsanResult;
 use crate::memory::Stack;
 use crate::*;
 
-<<<<<<< HEAD
 #[thread_local]
 pub static LOCAL_CTX: UnsafeCell<MaybeUninit<LocalCtx>> = UnsafeCell::new(MaybeUninit::uninit());
 
 static TLS_SIZE: usize = 100;
-=======
-pub static TLS_SIZE: usize = 100;
->>>>>>> 6192f55 (Wipe TLS immediately after encountering a maybe-uninstrumented function.)
 
 #[thread_local]
 #[unsafe(no_mangle)]
