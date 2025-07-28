@@ -157,7 +157,7 @@ impl BorrowTracker {
         };
 
         tree.new_child(child_params);
-
+*/
         Ok(new_tag)
     }
 
@@ -196,7 +196,7 @@ impl BorrowTracker {
             // TODO: Replace with actual span
             Span::new(),
             global_ctx.allocator(),
-        )?;
+        )?;*/
 
         let info = unsafe { &mut *self.prov.alloc_info };
         info.alloc_id = AllocId::invalid();

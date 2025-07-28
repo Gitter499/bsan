@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use backtrace::Backtrace;
 use core::cell::SyncUnsafeCell;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};

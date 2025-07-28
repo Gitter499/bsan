@@ -25,6 +25,7 @@ use core::panic::PanicInfo;
 use core::ptr::NonNull;
 use core::{fmt, ptr};
 
+use backtrace::Backtrace;
 use bsan_shared::{AccessKind, RetagInfo, Size};
 use libc_print::std_name::*;
 use spin::Mutex;
@@ -336,10 +337,12 @@ unsafe extern "C-unwind" fn __bsan_retag(
     let local_ctx = unsafe { local_ctx_mut() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm) };
+    /*
     BorrowTracker::new(prov, object_addr, Some(access_size))
         .and_then(|opt| opt.map(|bt| bt.retag(global_ctx, local_ctx, retag_info)).transpose())
         .unwrap_or_else(|err| handle_err!(err, global_ctx))
-        .unwrap_or(bor_tag)
+        .unwrap_or(bor_tag)*/
+    BorTag(0)
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -396,6 +399,7 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     size: usize,
     alloc_id: AllocId,
     bor_tag: BorTag,
+    id: usize,
 ) -> NonNull<AllocInfo> {
     let ctx = unsafe { global_ctx() };
     unsafe {
