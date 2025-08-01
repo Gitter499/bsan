@@ -94,71 +94,71 @@ impl BorrowTracker {
             global_ctx.add_protected_tag(new_tag, protect);
         }*/
 
-        if retag_info.size == 0 {
-            return Ok(new_tag);
-        }
-
-        let mut initial_perms = RangeMap::new_in(
-            Size::from_bytes(retag_info.size),
-            LocationState::new_accessed(Permission::new_disabled(), IdempotentForeignAccess::None),
-            global_ctx.allocator(),
-        );
-
-        let sifa = retag_info.perm.perm_kind.strongest_idempotent_foreign_access(is_protected);
-        let new_loc = if requires_access {
-            LocationState::new_accessed(retag_info.perm.perm_kind, sifa)
-        } else {
-            LocationState::new_non_accessed(retag_info.perm.perm_kind, sifa)
-        };
-
-        for (_loc_range, loc) in initial_perms.iter_mut_all() {
-            *loc = new_loc;
-        }
-
-        let base_offset = self.range.start;
-        if let Some(access_kind) = retag_info.perm.access_kind {
-            for (perm_range, perm) in initial_perms.iter_mut_all() {
-                if perm.is_accessed() {
-                    // Some reborrows incur a read access to the parent.
-                    // Adjust range to be relative to allocation start
-                    let range_in_alloc = AllocRange {
-                        start: Size::from_bytes(perm_range.start) + base_offset,
-                        size: Size::from_bytes(perm_range.end - perm_range.start),
-                    };
-
-                    // Perform the access (update the Tree Borrows FSM)
-                    tree.perform_access(
-                        self.prov.bor_tag,
-                        // TODO: Validate the Range
-                        Some((range_in_alloc, access_kind, AccessCause::Reborrow)),
-                        global_ctx,
-                        self.prov.alloc_id,
-                        // TODO: Replace with actual span
-                        Span::new(),
-                        // Passing in allocator explicitly to stay consistent with API
-                        global_ctx.allocator(),
-                    )?;
+                if retag_info.size == 0 {
+                    return Ok(new_tag);
                 }
-            }
-        }
 
-        let protected = retag_info.perm.protector_kind.is_some();
-        let default_perm = retag_info.perm.perm_kind;
+                let mut initial_perms = RangeMap::new_in(
+                    Size::from_bytes(retag_info.size),
+                    LocationState::new_accessed(Permission::new_disabled(), IdempotentForeignAccess::None),
+                    global_ctx.allocator(),
+                );
 
-        // base offset should be the offset, from zero, where the retag is taking place within the allocation.
-        let child_params = ChildParams {
-            base_offset,
-            parent_tag,
-            new_tag,
-            initial_perms,
-            default_perm,
-            protected,
-            // TODO: Replace with actual span
-            span: Span::new(),
-        };
+                let sifa = retag_info.perm.perm_kind.strongest_idempotent_foreign_access(is_protected);
+                let new_loc = if requires_access {
+                    LocationState::new_accessed(retag_info.perm.perm_kind, sifa)
+                } else {
+                    LocationState::new_non_accessed(retag_info.perm.perm_kind, sifa)
+                };
 
-        tree.new_child(child_params);
-*/
+                for (_loc_range, loc) in initial_perms.iter_mut_all() {
+                    *loc = new_loc;
+                }
+
+                let base_offset = self.range.start;
+                if let Some(access_kind) = retag_info.perm.access_kind {
+                    for (perm_range, perm) in initial_perms.iter_mut_all() {
+                        if perm.is_accessed() {
+                            // Some reborrows incur a read access to the parent.
+                            // Adjust range to be relative to allocation start
+                            let range_in_alloc = AllocRange {
+                                start: Size::from_bytes(perm_range.start) + base_offset,
+                                size: Size::from_bytes(perm_range.end - perm_range.start),
+                            };
+
+                            // Perform the access (update the Tree Borrows FSM)
+                            tree.perform_access(
+                                self.prov.bor_tag,
+                                // TODO: Validate the Range
+                                Some((range_in_alloc, access_kind, AccessCause::Reborrow)),
+                                global_ctx,
+                                self.prov.alloc_id,
+                                // TODO: Replace with actual span
+                                Span::new(),
+                                // Passing in allocator explicitly to stay consistent with API
+                                global_ctx.allocator(),
+                            )?;
+                        }
+                    }
+                }
+
+                let protected = retag_info.perm.protector_kind.is_some();
+                let default_perm = retag_info.perm.perm_kind;
+
+                // base offset should be the offset, from zero, where the retag is taking place within the allocation.
+                let child_params = ChildParams {
+                    base_offset,
+                    parent_tag,
+                    new_tag,
+                    initial_perms,
+                    default_perm,
+                    protected,
+                    // TODO: Replace with actual span
+                    span: Span::new(),
+                };
+
+                tree.new_child(child_params);
+        */
         Ok(new_tag)
     }
 
