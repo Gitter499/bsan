@@ -331,18 +331,16 @@ unsafe extern "C-unwind" fn __bsan_retag(
     alloc_id: AllocId,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
-    id: usize,
+    protector_slot: *mut BorTag,
 ) -> BorTag {
     let global_ctx = unsafe { global_ctx() };
     let local_ctx = unsafe { local_ctx_mut() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm) };
-    /*
     BorrowTracker::new(prov, object_addr, Some(access_size))
         .and_then(|opt| opt.map(|bt| bt.retag(global_ctx, local_ctx, retag_info)).transpose())
         .unwrap_or_else(|err| handle_err!(err, global_ctx))
-        .unwrap_or(bor_tag)*/
-    BorTag(0)
+        .unwrap_or(bor_tag)
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -354,10 +352,8 @@ unsafe extern "C-unwind" fn __bsan_read(
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
 ) {
-    // Assuming root tag has been initialized in the tree
     let global_ctx = unsafe { global_ctx() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
-
     BorrowTracker::new(prov, ptr, Some(access_size))
         .and_then(|bt| bt.iter().try_for_each(|t| t.access(global_ctx, AccessKind::Read)))
         .unwrap_or_else(|err| handle_err!(err, global_ctx));
@@ -401,7 +397,6 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     size: usize,
     alloc_id: AllocId,
     bor_tag: BorTag,
-    id: usize,
 ) -> NonNull<AllocInfo> {
     let ctx = unsafe { global_ctx() };
     unsafe {

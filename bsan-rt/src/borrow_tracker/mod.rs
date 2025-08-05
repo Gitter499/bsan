@@ -87,12 +87,12 @@ impl BorrowTracker {
         let is_protected = retag_info.perm.protector_kind.is_some();
         let requires_access = retag_info.perm.access_kind.is_some();
 
-        if let Some(protect) = retag_info.perm.protector_kind {
+        /*if let Some(protect) = retag_info.perm.protector_kind {
             // We register the protection in two different places.
             // This makes creating a protector slower, but checking whether a tag
             // is protected faster.
             global_ctx.add_protected_tag(new_tag, protect);
-        }
+        }*/
 
         if retag_info.size == 0 {
             return Ok(new_tag);

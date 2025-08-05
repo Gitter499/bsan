@@ -1,11 +1,11 @@
 use alloc::vec::Vec;
-use backtrace::Backtrace;
 use core::cell::SyncUnsafeCell;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::AtomicUsize;
 
+use backtrace::Backtrace;
 use bsan_shared::ProtectorKind;
 use hashbrown::{DefaultHashBuilder, HashMap};
 

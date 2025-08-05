@@ -59,9 +59,6 @@ STATISTIC(NumAllocaEliminated, "Number of times that instrumentation is eliminat
 STATISTIC(NumReadsEliminated, "Number of times that instrumentation is eliminated for an read.");
 STATISTIC(NumWritesEliminated, "Number of times that instrumentation is eliminated for a write.");
 
-uint64_t AllocCounter = 0;
-uint64_t RetagCounter = 0;
-
 namespace {
 struct BorrowSanitizer {
 
@@ -207,6 +204,10 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     SmallVector<AllocaInst *, 16> StaticAllocaVec;
     SmallVector<AllocaInst *, 1> DynamicAllocaVec;
 
+    unsigned NumFnEntryRetags = 0;
+    unsigned CurrFnEntryRetag = 0;
+    Value *FnEntryRetagArray;
+
     // A temporary cache of local allocas that are always accessed safely and will never
     // escape the current function. If these variables are never retagged, then we can skip
     // tracking their provenance at runtime, since they will never be a source of UB.
@@ -329,8 +330,8 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         if (Argument *A = dyn_cast<Argument>(V)) {
             // We always need to load the provenance for arguments right at the
             // beginning of the function. Otherwise, subsequent function calls could
-            // overwrite these values before they're first read from the thread-local array
-            IRBuilder<> EntryIRB(FnPrologueEnd);
+            // overwrite them before they can be read from TLS
+            IRBuilder<> EntryIRB(FnPrologueStart);
             if (ArgumentProvenance.count(A)) {
                 if(ArgumentProvenance[A].size() == 0){
                     report_fatal_error("Empty argument provenance!");
@@ -656,6 +657,10 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     }
 
     void initStack() {
+        if(NumFnEntryRetags > 0) {
+            IRBuilder<> EntryIRB(FnPrologueStart);
+            FnEntryRetagArray = EntryIRB.CreateAlloca(ArrayType::get(BS.IntptrTy, NumFnEntryRetags));
+        }
         for (AllocaInst *AI : StaticAllocaVec) {
             processStaticAlloca(AI);
         }
@@ -700,8 +705,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     ScalarProvenance processAllocation(IRBuilder<> &IRB, Value *Address, Value *Size) {
         Value *ID = IRB.CreateCall(BS.BsanFuncNewAllocID, {});
         Value *Tag = IRB.CreateCall(BS.BsanFuncNewBorrowTag, {});
-        Value *Info = IRB.CreateCall(BS.BsanFuncAlloc, {Address, Size, ID, Tag, ConstantInt::get(BS.IntptrTy, AllocCounter)});
-        AllocCounter += 1;
+        Value *Info = IRB.CreateCall(BS.BsanFuncAlloc, {Address, Size, ID, Tag});
         ScalarProvenance Prov = ScalarProvenance(ID, Tag, Info);
         setProvenance(Address, Prov);
         return Prov;
@@ -736,6 +740,16 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         }
     }
 
+    bool isFnEntryRetag(CallBase *CB) {
+        assert(CB->arg_size() == 4 && "Missing arguments to retag.");
+        Value *IsFnEntry = CB->getArgOperand(3);   
+        if (ConstantInt *CI = dyn_cast<ConstantInt>(CB->getArgOperand(3))) { 
+            return !CI->isZero();
+        }else{
+            report_fatal_error("Invalid parameters to retag.\n");
+        }
+    }
+
     using InstVisitor<BorrowSanitizerVisitor>::visit;
     // We use this visitor function when reordering instructions in reverse postorder;
     // none of the other visitors are called until the subsequent step, after we initialize
@@ -746,22 +760,14 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         if (I.getOpcode() == Instruction::Alloca) {
             AllocaInst &AI = static_cast<AllocaInst &>(I);
             if (shouldInstrumentAlloca(AI)) {
-                if(SSGI && SSGI->isSafe(AI) && !isEscapeSource(&AI)) {
-                    LocalSafeAllocas.insert(&AI);
-                }else{
-                    registerAlloca(&AI);
-                }
+                registerAlloca(&AI);
             }
             return;
         }else if (CallBase::classof(&I)) {
             CallBase *CB = dyn_cast<CallBase>(&I);
-            if(CB->getIntrinsicID() == Intrinsic::retag) {
-                assert(CB->arg_size() > 0 && "Missing arguments to retag.");
-                Value *PtrToRetag = CB->getArgOperand(0);
-                for(auto AI : LocalSafeAllocas) {
-                    if(AA.alias(AI, PtrToRetag) != AliasResult::NoAlias) {
-                        registerAlloca(AI);
-                    }
+            if(CB->getIntrinsicID() == Intrinsic::retag){
+                if(isFnEntryRetag(CB)) {
+                    NumFnEntryRetags += 1;
                 }
             }
         }
@@ -913,9 +919,29 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         }
     }
 
-    void visitIntrinsicInst(IntrinsicInst &I) {
+   void visitIntrinsicInst(IntrinsicInst &I) {
         if(I.getIntrinsicID() == Intrinsic::retag) {
+            Value *BorTagSlot;
+            IRBuilder<> IRB(&I);
+            if(isFnEntryRetag(&I)) {
+                assert(CurrFnEntryRetag < NumFnEntryRetags);
+                if(CurrFnEntryRetag == 0) {
+                    BorTagSlot = FnEntryRetagArray;
+                }else{  
+                    Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
+                    BorTagSlot = IRB.CreateGEP(
+                        ArrayType::get(BS.IntptrTy, NumFnEntryRetags),
+                        FnEntryRetagArray, 
+                        {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), CurrFnEntryRetag) }
+                    );
+                    CurrFnEntryRetag += 1;
+                }
+            }else{
+                BorTagSlot = ConstantPointerNull::get(BS.PtrTy);
+            }
+
             ScalarProvenance Prov = assertScalarProvenance(I.getOperand(0));
+
             CallInst *CIRetag = CallInst::Create(BS.BsanFuncRetag, {
                 I.getOperand(0),
                 I.getOperand(1),
@@ -923,10 +949,10 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                 Prov.ID, 
                 Prov.Tag, 
                 Prov.Info, 
-                ConstantInt::get(BS.IntptrTy, RetagCounter)
+                BorTagSlot
             });
+
             ReplaceInstWithInst(&I, CIRetag);
-            RetagCounter += 1;
         }
     }
 
@@ -1386,7 +1412,7 @@ void BorrowSanitizer::initializeCallbacks(Module &M, const TargetLibraryInfo &TL
     BsanFuncRetag = M.getOrInsertFunction(
         kBsanFuncRetagName, AL,
         IntptrTy,
-        PtrTy, IntptrTy, Int64Ty, IntptrTy, IntptrTy, PtrTy, IntptrTy
+        PtrTy, IntptrTy, Int64Ty, IntptrTy, IntptrTy, PtrTy, PtrTy
     );
 
     BsanFuncPushFrame = M.getOrInsertFunction(
@@ -1446,7 +1472,7 @@ void BorrowSanitizer::initializeCallbacks(Module &M, const TargetLibraryInfo &TL
     BsanFuncAlloc = M.getOrInsertFunction(
         kBsanFuncAllocName, AL,
         PtrTy,
-        PtrTy, IntptrTy, IntptrTy, IntptrTy, IntptrTy
+        PtrTy, IntptrTy, IntptrTy, IntptrTy
     );
 
     BsanFuncDealloc = M.getOrInsertFunction(
