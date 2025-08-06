@@ -1,6 +1,6 @@
 artifact_url = "https://github.com/BorrowSanitizer/rust/releases/download/"
-tag = "rolling-1.90.0-dev-e27d0c1"
-sha = "e27d0c149394221eb1550c078e4cf2ccb0914bd3"
+tag = "rolling-1.90.0-dev-06969f4"
+sha = "06969f46ec42538addbe7daab1db367a5edbb5cb"
 version = "1.90.0-dev"
 dependencies = ["cmake", "ninja", "curl"]
 targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]

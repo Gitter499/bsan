@@ -5,9 +5,9 @@ use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::AtomicUsize;
 
+use backtrace::Backtrace;
 use bsan_shared::ProtectorKind;
-use hashbrown::HashMap;
-use rustc_hash::FxBuildHasher;
+use hashbrown::{DefaultHashBuilder, HashMap};
 
 use crate::errors::ErrorInfo;
 use crate::memory::hooks::{BsanAllocHooks, BsanHooks};
@@ -78,7 +78,7 @@ impl GlobalCtx {
     }
 
     #[allow(unused)]
-    fn exit(&self, code: i32) -> ! {
+    pub fn exit(&self, code: i32) -> ! {
         unsafe { (self.hooks.exit)(code) }
     }
 
@@ -105,9 +105,14 @@ impl GlobalCtx {
         tag_map.insert(bor_tag, protector_kind);
     }
 
-    pub fn remove_protected_tag(&self, bor_tag: BorTag) {
+    pub fn remove_protected_tags(&self, bor_tags: &[BorTag]) {
         let mut tag_map = self.protected_tags.lock();
-        tag_map.remove(&bor_tag);
+        for tag in bor_tags {
+            if *tag != BorTag(0) {
+                crate::eprintln!("Removing tag {:?}", tag);
+                tag_map.remove(tag);
+            }
+        }
     }
 
     pub fn get_protector_kind(&self, bor_tag: BorTag) -> Option<ProtectorKind> {
@@ -117,6 +122,7 @@ impl GlobalCtx {
 
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
         crate::eprintln!("An error occurred: {info:?}\n\nExiting...");
+        crate::eprintln!("{:?}", Backtrace::new());
         self.exit(1)
     }
 }
@@ -176,10 +182,10 @@ impl core::fmt::Write for BVec<u8> {
 
 /// A thin wrapper around `HashMap` that uses `GlobalCtx` as its allocator
 #[derive(Debug, Clone)]
-pub struct BHashMap<K, V>(HashMap<K, V, FxBuildHasher, BsanAllocHooks>);
+pub struct BHashMap<K, V>(HashMap<K, V, DefaultHashBuilder, BsanAllocHooks>);
 
 impl<K, V> Deref for BHashMap<K, V> {
-    type Target = HashMap<K, V, FxBuildHasher, BsanAllocHooks>;
+    type Target = HashMap<K, V, DefaultHashBuilder, BsanAllocHooks>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -193,14 +199,14 @@ impl<K, V> DerefMut for BHashMap<K, V> {
 
 impl<K, V> BHashMap<K, V> {
     fn new_in(hooks: BsanAllocHooks) -> Self {
-        Self(HashMap::with_hasher_in(FxBuildHasher, hooks))
+        Self(HashMap::with_hasher_in(foldhash::fast::RandomState::default(), hooks))
     }
 }
 
 /// We need to declare a global allocator to be able to use `alloc` in a `#[no_std]`
 /// crate. Anything other than the `GlobalCtx` object will clash with the interceptors,
-/// so we provide a placeholder that panics when it is used.
-#[cfg(not(test))]
+/// For now, this allocator will defer to libc malloc and free, but in the future, we can
+/// set its endpoints to immediately panic with an error message to help with debugging.
 mod global_alloc {
     use core::alloc::{GlobalAlloc, Layout};
 
@@ -208,11 +214,11 @@ mod global_alloc {
     struct DummyAllocator;
 
     unsafe impl GlobalAlloc for DummyAllocator {
-        unsafe fn alloc(&self, _layout: Layout) -> *mut u8 {
-            panic!()
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            unsafe { libc::malloc(layout.size()).cast::<u8>() }
         }
-        unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
-            panic!()
+        unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
+            unsafe { libc::free(ptr.cast::<libc::c_void>()) }
         }
     }
 
