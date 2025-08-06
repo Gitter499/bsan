@@ -398,7 +398,6 @@ unsafe extern "C-unwind" fn __bsan_alloc(
     size: usize,
     alloc_id: AllocId,
     bor_tag: BorTag,
-    id: usize,
 ) -> NonNull<AllocInfo> {
     let ctx = unsafe { global_ctx() };
     unsafe {
