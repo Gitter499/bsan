@@ -271,6 +271,8 @@ impl Command {
         let driver = env.build_artifact(BsanDriver, &[])?;
         let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
 
+        let sysroot_dir = path!(&env.build_dir / "sysroot");
+
         env.sh.set_var("BSAN_PLUGIN", plugin);
         env.sh.set_var("BSAN_DRIVER", &driver);
         env.sh.set_var("BSAN_RT_DIR", runtime.parent().unwrap());
