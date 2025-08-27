@@ -274,14 +274,14 @@ impl Command {
         env.sh.set_var("BSAN_PLUGIN", plugin);
         env.sh.set_var("BSAN_DRIVER", &driver);
         env.sh.set_var("BSAN_RT_DIR", runtime.parent().unwrap());
-        env.sh.set_var("BSAN_SYSROOT", path!(&env.build_dir / "sysroot"));
+        env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
 
         cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
 
         cmd!(env.sh, "{driver} {file}")
             .env("BSAN_BE_RUSTC", "target")
             .args(args)
-            .arg("--sysroot=/workspaces/bsan/target/sysroot")
+            .arg(format!("--sysroot={}", sysroot_dir.display()))
             .quiet()
             .run()?;
 
