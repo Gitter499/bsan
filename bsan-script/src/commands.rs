@@ -202,13 +202,15 @@ impl Command {
 
             if tools.contains(&BenchTool::MIRI) {
                 env.sh.set_var("MIRIFLAGS", &flags.join(" "));
+                // TODO: Possible variable for changing miri's toolchain
+                // let miri_toolchain = ""
 
-                cmd!(env.sh, "cargo +nightly miri setup")
+                cmd!(env.sh, "cargo miri setup")
                     .quiet()
                     .run()
                     .context("Failed to setup Miri")?;
 
-                commands.push(format!("cargo +nightly miri run -p programs --bin {program_name}"));
+                commands.push(format!("cargo miri run -p programs --bin {program_name}"));
             }
 
             if tools.contains(&BenchTool::NATIVE) {
