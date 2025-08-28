@@ -1,14 +1,19 @@
 name: Bench
 on:
   push:
-    branches: [ "main", "gitter499/in-progress-bench" ]
+    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  workflow_dispatch: 
+  workflow_dispatch:
+
 env:
   CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write # for gh-pages
+
 jobs:
- build:
+  build:
     strategy:
       fail-fast: false
       matrix:
@@ -17,18 +22,58 @@ jobs:
             os: ubuntu-24.04-arm
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+
     runs-on: '${{ matrix.config.os }}'
     name: '${{ matrix.config.target }}'
     steps:
-    - uses: actions/checkout@v4
-    - name: Install dependencies
-      run: |
-        rustup default nightly
-    - name: Setup BSAN
-      run: ./xb setup
-    - name: benchmark
-      run: ./xb bench
-    - uses: actions/upload-artifact@v4
-      with:
-        name: 'bench-results-${{ matrix.config.target }}'
-        path: tests/benches/results
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          rustup default nightly
+
+      - name: Setup BSAN
+        run: ./xb setup
+
+      - name: benchmark
+        run: ./xb bench
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 'bench-results-${{ matrix.config.target }}'
+          path: tests/benches/results
+
+  process-and-deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: ./bsan-script
+        run: npm install
+
+      - name: Prepare data
+        working-directory: ./bsan-script
+        run: node prepare-data.js
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./bsan-script
+          publish_branch: gh-pages
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          commit_message: 'Deploy benchmark results to Pages'

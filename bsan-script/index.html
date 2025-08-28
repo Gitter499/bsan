@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+  <head>
+    <title>GitHub Actions Visualizer</title>
+    <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
+  </head>
+  <body>
+    <h1>GitHub Actions Visualizer</h1>
+    <div id="controls">
+      <button id="miri-toggle">Toggle Miri</button>
+      <select id="arch-select">
+        <option value="bench-results-aarch64-unknown-linux-gnu">aarch64-unknown-linux-gnu</option>
+        <option value="bench-results-x86_64-unknown-linux-gnu">x86_64-unknown-linux-gnu</option>
+      </select>
+    </div>
+    <div id="charts"></div>
+
+    <script src="data.js"></script>
+    <script type="text/javascript" src="index.js"></script>
+  </body>
+</html>
