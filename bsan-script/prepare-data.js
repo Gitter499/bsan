@@ -1,44 +1,41 @@
 const fs = require('fs');
 const path = require('path');
-const AdmZip = require('adm-zip');
 
 const ARTIFACTS_DIR = './artifacts';
 const OUTPUT_DIR = './dist';
 const OUTPUT_FILE = path.join(OUTPUT_DIR, 'data.js');
-
-const artifactNames = [
-  'bench-results-aarch64-unknown-linux-gnu',
-  'bench-results-x86_64-unknown-linux-gnu'
-];
 
 const benchmarkData = {};
 
 if (!fs.existsSync(ARTIFACTS_DIR)) {
   console.warn(`Artifacts directory not found: ${ARTIFACTS_DIR}`);
 } else {
-  for (const name of artifactNames) {
-    const zipPath = path.join(ARTIFACTS_DIR, `${name}.zip`);
-    if (!fs.existsSync(zipPath)) {
-      console.warn(`Artifact zip not found: ${zipPath}`);
-      continue;
-    }
+  const artifactDirs = fs.readdirSync(ARTIFACTS_DIR);
 
-    try {
-      const zip = new AdmZip(zipPath);
-      const zipEntries = zip.getEntries();
-      const jsonEntry = zipEntries.find(entry => entry.entryName.endsWith('.json'));
+  for (const dirName of artifactDirs) {
+    const dirPath = path.join(ARTIFACTS_DIR, dirName);
+    if (fs.statSync(dirPath).isDirectory()) {
+      const files = fs.readdirSync(dirPath);
+      const jsonFile = files.find(file => file.endsWith('.json'));
 
-      if (jsonEntry) {
-        const jsonContent = zip.readAsText(jsonEntry);
-        benchmarkData[name] = JSON.parse(jsonContent);
-        console.log(`Successfully processed ${name}`);
+      if (jsonFile) {
+        const jsonFilePath = path.join(dirPath, jsonFile);
+        try {
+          const jsonContent = fs.readFileSync(jsonFilePath, 'utf-8');
+          benchmarkData[dirName] = JSON.parse(jsonContent);
+          console.log(`Successfully processed ${dirName}`);
+        } catch (error) {
+          console.error(`Error processing artifact ${dirName}:`, error);
+        }
       } else {
-        console.warn(`No JSON file found in artifact: ${name}`);
+        console.warn(`No JSON file found in artifact directory: ${dirName}`);
       }
-    } catch (error) {
-      console.error(`Error processing artifact ${name}:`, error);
     }
   }
+}
+
+if (!fs.existsSync(OUTPUT_DIR)) {
+  fs.mkdirSync(OUTPUT_DIR);
 }
 
 const outputContent = `window.benchmarkData = ${JSON.stringify(benchmarkData, null, 2)};`;
