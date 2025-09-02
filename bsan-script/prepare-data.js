@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const ARTIFACTS_DIR = './artifacts';
-const OUTPUT_DIR = './dist';
+const ARTIFACTS_DIR = '../artifacts';
+const OUTPUT_DIR = '.';
 const OUTPUT_FILE = path.join(OUTPUT_DIR, 'data.js');
 
 const benchmarkData = {};
@@ -34,9 +34,7 @@ if (!fs.existsSync(ARTIFACTS_DIR)) {
   }
 }
 
-if (!fs.existsSync(OUTPUT_DIR)) {
-  fs.mkdirSync(OUTPUT_DIR);
-}
+
 
 const outputContent = `window.benchmarkData = ${JSON.stringify(benchmarkData, null, 2)};`;
 fs.writeFileSync(OUTPUT_FILE, outputContent);
