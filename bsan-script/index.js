@@ -1,19 +1,26 @@
 let showMiri = false;
 
-const createCharts = (architecture) => {
+const createCharts = (architecture, benchmark) => {
   const chartsDiv = document.getElementById("charts");
   chartsDiv.innerHTML = ""; // Clear previous charts
 
-  const data = window.benchmarkData[architecture];
+  const archData = window.benchmarkData[architecture];
+
+  if (!archData) {
+    chartsDiv.innerHTML = `<p>No data found for architecture: ${architecture}</p>`;
+    return;
+  }
+
+  const data = archData[benchmark];
 
   if (!data) {
-    chartsDiv.innerHTML = `<p>No data found for architecture: ${architecture}</p>`;
+    chartsDiv.innerHTML = `<p>No data found for benchmark: ${benchmark}</p>`;
     return;
   }
 
   const styledBoxPlotSpec = {
     "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-    "title": `Benchmark Execution Time Comparison (${architecture})`,
+    "title": `Benchmark Execution Time Comparison (${architecture} - ${benchmark})`,
     "width": 600,
     "height": 400,
     "data": {
@@ -36,7 +43,7 @@ const createCharts = (architecture) => {
 
   const styledScatterPlotSpec = {
     "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-    "title": `Benchmark Execution Time Comparison (${architecture})`,
+    "title": `Benchmark Execution Time Comparison (${architecture} - ${benchmark})`,
     "width": 600,
     "height": 400,
     "data": {
@@ -69,14 +76,34 @@ const createCharts = (architecture) => {
 
 const main = () => {
   const archSelect = document.getElementById("arch-select");
+  const benchmarkSelect = document.getElementById("benchmark-select");
   const miriToggle = document.getElementById("miri-toggle");
+
+  const populateBenchmarks = (architecture) => {
+    benchmarkSelect.innerHTML = "";
+    const benchmarks = Object.keys(window.benchmarkData[architecture] || {});
+    for (const benchmark of benchmarks) {
+      const option = document.createElement("option");
+      option.value = benchmark;
+      option.textContent = benchmark;
+      benchmarkSelect.appendChild(option);
+    }
+  };
 
   const updateCharts = () => {
     const selectedArch = archSelect.value;
-    createCharts(selectedArch);
+    const selectedBenchmark = benchmarkSelect.value;
+    createCharts(selectedArch, selectedBenchmark);
   };
 
-  archSelect.addEventListener("change", updateCharts);
+  archSelect.addEventListener("change", () => {
+    const selectedArch = archSelect.value;
+    populateBenchmarks(selectedArch);
+    updateCharts();
+  });
+
+  benchmarkSelect.addEventListener("change", updateCharts);
+
   miriToggle.addEventListener("click", () => {
     showMiri = !showMiri;
     updateCharts();
@@ -84,6 +111,8 @@ const main = () => {
 
   // Initial load
   if (window.benchmarkData) {
+    const initialArch = archSelect.value;
+    populateBenchmarks(initialArch);
     updateCharts();
   } else {
     document.getElementById("charts").innerHTML = "<p>Benchmark data not loaded. Please ensure data.js is present.</p>";
