@@ -19,7 +19,7 @@ const createCharts = (architecture, benchmark) => {
   }
 
   const styledBoxPlotSpec = {
-    "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+    "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
     "title": `Benchmark Execution Time Comparison (${architecture} - ${benchmark})`,
     "width": 600,
     "height": 400,
