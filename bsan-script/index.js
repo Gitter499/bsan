@@ -29,7 +29,7 @@ const createCharts = (architecture, benchmark) => {
     "transform": [
       { "flatten": ["times"] },
       {
-        "calculate": "{'./target/release/hello_stress': 'native', './hello_stress': 'BSAN', 'cargo +nightly miri run -p programs --bin hello_stress': 'Miri'}[datum.command]",
+        "calculate": "test(datum.command, 'miri') ? 'Miri' : (test(datum.command, '^./target/release/') ? 'native' : 'BSAN')",
         "as": "Tool"
       },
       { "filter": showMiri ? "true" : "datum.Tool !== 'Miri'" }
@@ -52,7 +52,7 @@ const createCharts = (architecture, benchmark) => {
     "transform": [
         { "flatten": ["times"] },
         {
-            "calculate": "{'./target/release/hello_stress': 'native', './hello_stress': 'BSAN', 'cargo +nightly miri run -p programs --bin hello_stress': 'Miri'}[datum.command]",
+            "calculate": "test(datum.command, 'miri') ? 'Miri' : (test(datum.command, '^./target/release/') ? 'native' : 'BSAN')",
             "as": "Tool"
         },
         { "filter": showMiri ? "true" : "datum.Tool !== 'Miri'" }
