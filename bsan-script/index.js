@@ -1,6 +1,6 @@
 let showMiri = false;
 
-const createCharts = (architecture, benchmark) => {
+const createCharts = (architecture, benchmark_with_suffix) => {
   const chartsDiv = document.getElementById("charts");
   chartsDiv.innerHTML = ""; // Clear previous charts
 
@@ -11,67 +11,210 @@ const createCharts = (architecture, benchmark) => {
     return;
   }
 
-  const data = archData[benchmark];
+  const data = archData[benchmark_with_suffix];
 
   if (!data) {
-    chartsDiv.innerHTML = `<p>No data found for benchmark: ${benchmark}</p>`;
+    chartsDiv.innerHTML = `<p>No data found for benchmark: ${benchmark_with_suffix}</p>`;
     return;
   }
 
-  const styledBoxPlotSpec = {
+  const benchmark = benchmark_with_suffix.replace("-results", "");
+
+  const tool_map = {
+    [`./target/release/${benchmark}`]: "native",
+    [`./${benchmark}`]: "BSAN",
+    [`cargo +nightly miri run -p programs --bin ${benchmark}`]: "Miri",
+  };
+
+  const calculate_tool_transform = {
+    "calculate": JSON.stringify(tool_map) + "[datum.command]",
+    "as": "Tool"
+  };
+
+  const baseSpec = {
     "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
-    "title": `Benchmark Execution Time Comparison (${architecture} - ${benchmark})`,
     "width": 600,
     "height": 400,
     "data": {
       "values": data.results
     },
     "transform": [
-      { "flatten": ["times"] },
-      {
-        "calculate": "test(datum.command, 'miri') ? 'Miri' : (test(datum.command, '^./target/release/') ? 'native' : 'BSAN')",
-        "as": "Tool"
+      {"flatten": ["times"]},
+      calculate_tool_transform,
+      {"filter": showMiri ? "datum.Tool !== null" : "datum.Tool !== 'Miri'"}
+    ]
+  };
+
+  const boxPlotSpec = {
+    ...baseSpec,
+    "title": "Benchmark Execution Time Comparison",
+    "mark": {
+      "type": "boxplot",
+      "extent": "min-max",
+      "size": 50,
+      "box": {
+        "stroke": "black",
+        "strokeWidth": 2
       },
-      { "filter": showMiri ? "true" : "datum.Tool !== 'Miri'" }
-    ],
-    "mark": "boxplot",
-    "encoding": {
-      "x": { "field": "Tool", "type": "nominal" },
-      "y": { "field": "times", "type": "quantitative", "scale": { "type": "log" } }
-    }
-  };
-
-  const styledScatterPlotSpec = {
-    "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-    "title": `Benchmark Execution Time Comparison (${architecture} - ${benchmark})`,
-    "width": 600,
-    "height": 400,
-    "data": {
-        "values": data.results
+      "median": {
+        "strokeWidth": 3
+      },
+      "color": {
+        "gradient": "linear",
+        "stops": [
+          { "offset": 0, "color": "#F6D28C" },
+          { "offset": 1, "color": "#B22222" }
+        ]
+      }
     },
-    "transform": [
-        { "flatten": ["times"] },
-        {
-            "calculate": "test(datum.command, 'miri') ? 'Miri' : (test(datum.command, '^./target/release/') ? 'native' : 'BSAN')",
-            "as": "Tool"
-        },
-        { "filter": showMiri ? "true" : "datum.Tool !== 'Miri'" }
-    ],
-    "mark": "point",
     "encoding": {
-        "x": { "field": "times", "type": "quantitative" },
-        "y": { "field": "Tool", "type": "nominal" },
-        "color": { "field": "Tool", "type": "nominal" }
+      "x": {
+        "field": "Tool",
+        "type": "nominal",
+        "title": "Tool",
+        "sort": {"op": "median", "field": "times", "order": "ascending"}
+      },
+      "y": {
+        "field": "times",
+        "type": "quantitative",
+        "title": "Execution Time (s)",
+        "scale": {"type": "log"},
+        "axis": {"format": ".3s"}
+      }
     }
   };
 
-  const boxPlotContainer = document.createElement("div");
-  chartsDiv.appendChild(boxPlotContainer);
-  vegaEmbed(boxPlotContainer, styledBoxPlotSpec);
+  const scatterPlotSpec = {
+    ...baseSpec,
+    "title": "Benchmark Execution Time Comparison (Native vs. BSAN)",
+    "transform": [
+      {"flatten": ["times"]},
+      calculate_tool_transform,
+      {"filter": "datum.Tool === 'native' || datum.Tool === 'BSAN'"}
+    ],
+    "layer": [
+      {
+        "mark": {
+          "type": "point",
+          "opacity": 0.6,
+          "filled": true,
+          "stroke": "black",
+          "strokeWidth": 0.5
+        },
+        "encoding": {
+          "color": {
+            "field": "Tool",
+            "type": "nominal",
+            "scale": {"scheme": "tableau10"},
+            "legend": {
+              "title": "Tool",
+              "orient": "bottom",
+              "direction": "horizontal"
+            }
+          },
+          "tooltip": [
+            {"field": "Tool", "type": "nominal", "title": "Test"},
+            {"field": "times", "type": "quantitative", "format": ".4f", "title": "Time (s)"}
+          ]
+        }
+      },
+      {
+        "mark": {
+          "type": "rule",
+          "color": "skyblue",
+          "opacity": 0.7,
+          "size": 3
+        },
+        "encoding": {
+          "x": {
+            "aggregate": "mean",
+            "field": "times"
+          }
+        }
+      }
+    ],
+    "encoding": {
+      "y": {
+        "field": "Tool",
+        "type": "nominal",
+        "title": "Tool",
+        "sort": {"op": "median", "field": "times", "order": "ascending"}
+      },
+      "x": {
+        "field": "times",
+        "type": "quantitative",
+        "title": "Execution Time (s)",
+        "scale": {"type": "linear", "domain": [0, 0.015]},
+        "axis": {"format": ".3s"}
+      }
+    }
+  };
 
-  const scatterPlotContainer = document.createElement("div");
-  chartsDiv.appendChild(scatterPlotContainer);
-  vegaEmbed(scatterPlotContainer, styledScatterPlotSpec);
+  const timeSeriesSpec = {
+    ...baseSpec,
+    "title": "Execution Time per Run with Average",
+    "transform": [
+      ...baseSpec.transform,
+      {
+        "window": [{"op": "row_number", "as": "run_number"}],
+        "groupby": ["Tool"]
+      }
+    ],
+    "layer": [
+      {
+        "mark": {
+          "type": "point",
+          "filled": true,
+          "opacity": 0.3
+        },
+        "encoding": {
+          "x": {
+            "field": "run_number",
+            "type": "quantitative",
+            "title": "Run Number",
+            "axis": {
+              "labelAngle": 0
+            }
+          },
+          "y": {
+            "field": "times",
+            "type": "quantitative",
+            "title": "Execution Time (s)",
+            "scale": {"zero": false}
+          },
+          "color": {
+            "field": "Tool",
+            "type": "nominal",
+            "title": "Tool"
+          }
+        }
+      },
+      {
+        "mark": {
+          "type": "rule",
+          "size": 3,
+          "opacity": 0.8
+        },
+        "encoding": {
+          "y": {
+            "aggregate": "mean",
+            "field": "times"
+          },
+          "color": {
+            "field": "Tool",
+            "type": "nominal"
+          }
+        }
+      }
+    ]
+  };
+
+  const specs = [boxPlotSpec, scatterPlotSpec, timeSeriesSpec];
+  specs.forEach(spec => {
+    const chartContainer = document.createElement("div");
+    chartsDiv.appendChild(chartContainer);
+    vegaEmbed(chartContainer, spec);
+  });
 };
 
 const main = () => {
@@ -111,6 +254,7 @@ const main = () => {
 
   // Initial load
   if (window.benchmarkData) {
+    
     const initialArch = archSelect.value;
     populateBenchmarks(initialArch);
     updateCharts();
