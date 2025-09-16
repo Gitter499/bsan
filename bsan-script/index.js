@@ -1,6 +1,6 @@
 let showMiri = false;
 
-const createCharts = (architecture, benchmark_with_suffix) => {
+const createChart = (architecture, benchmark_with_suffix, chartType) => {
   const chartsDiv = document.getElementById("charts");
   chartsDiv.innerHTML = ""; // Clear previous charts
 
@@ -32,7 +32,7 @@ const createCharts = (architecture, benchmark_with_suffix) => {
   };
 
   const baseSpec = {
-    "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+    "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
     "width": 600,
     "height": 400,
     "data": {
@@ -54,17 +54,12 @@ const createCharts = (architecture, benchmark_with_suffix) => {
       "size": 50,
       "box": {
         "stroke": "black",
-        "strokeWidth": 2
+        "strokeWidth": 2,
+        "fillOpacity": 0.5
       },
       "median": {
+        "stroke": "black",
         "strokeWidth": 3
-      },
-      "color": {
-        "gradient": "linear",
-        "stops": [
-          { "offset": 0, "color": "#F6D28C" },
-          { "offset": 1, "color": "#B22222" }
-        ]
       }
     },
     "encoding": {
@@ -79,7 +74,12 @@ const createCharts = (architecture, benchmark_with_suffix) => {
         "type": "quantitative",
         "title": "Execution Time (s)",
         "scale": {"type": "log"},
-        "axis": {"format": ".3s"}
+        "axis": {"format": ".4f"}
+      },
+      "color": {
+        "field": "Tool",
+        "type": "nominal",
+        "scale": {"scheme": "tableau10"}
       }
     }
   };
@@ -126,7 +126,7 @@ const createCharts = (architecture, benchmark_with_suffix) => {
           "size": 3
         },
         "encoding": {
-          "x": {
+          "y": {
             "aggregate": "mean",
             "field": "times"
           }
@@ -134,18 +134,18 @@ const createCharts = (architecture, benchmark_with_suffix) => {
       }
     ],
     "encoding": {
-      "y": {
+      "x": {
         "field": "Tool",
         "type": "nominal",
         "title": "Tool",
         "sort": {"op": "median", "field": "times", "order": "ascending"}
       },
-      "x": {
+      "y": {
         "field": "times",
         "type": "quantitative",
         "title": "Execution Time (s)",
         "scale": {"type": "linear", "domain": [0, 0.015]},
-        "axis": {"format": ".3s"}
+        "axis": {"format": ".4f"}
       }
     }
   };
@@ -180,7 +180,8 @@ const createCharts = (architecture, benchmark_with_suffix) => {
             "field": "times",
             "type": "quantitative",
             "title": "Execution Time (s)",
-            "scale": {"zero": false}
+            "scale": {"zero": false},
+            "axis": {"format": ".4f"}
           },
           "color": {
             "field": "Tool",
@@ -209,17 +210,32 @@ const createCharts = (architecture, benchmark_with_suffix) => {
     ]
   };
 
-  const specs = [boxPlotSpec, scatterPlotSpec, timeSeriesSpec];
-  specs.forEach(spec => {
-    const chartContainer = document.createElement("div");
-    chartsDiv.appendChild(chartContainer);
-    vegaEmbed(chartContainer, spec);
-  });
+  if (showMiri) {
+    timeSeriesSpec.layer[0].encoding.y.scale.type = "log";
+  }
+
+  let spec;
+  switch (chartType) {
+    case "box":
+      spec = boxPlotSpec;
+      break;
+    case "scatter":
+      spec = scatterPlotSpec;
+      break;
+    case "time":
+      spec = timeSeriesSpec;
+      break;
+  }
+
+  const chartContainer = document.createElement("div");
+  chartsDiv.appendChild(chartContainer);
+  vegaEmbed(chartContainer, spec);
 };
 
 const main = () => {
   const archSelect = document.getElementById("arch-select");
   const benchmarkSelect = document.getElementById("benchmark-select");
+  const chartTypeSelect = document.getElementById("chart-type-select");
   const miriToggle = document.getElementById("miri-toggle");
 
   const populateBenchmarks = (architecture) => {
@@ -233,31 +249,37 @@ const main = () => {
     }
   };
 
-  const updateCharts = () => {
+  const updateChart = () => {
     const selectedArch = archSelect.value;
     const selectedBenchmark = benchmarkSelect.value;
-    createCharts(selectedArch, selectedBenchmark);
+    const selectedChartType = chartTypeSelect.value;
+    createChart(selectedArch, selectedBenchmark, selectedChartType);
+  };
+
+  const updateMiriButton = () => {
+    miriToggle.textContent = showMiri ? "Miri: On" : "Miri: Off";
   };
 
   archSelect.addEventListener("change", () => {
-    const selectedArch = archSelect.value;
-    populateBenchmarks(selectedArch);
-    updateCharts();
+    populateBenchmarks(archSelect.value);
+    updateChart();
   });
 
-  benchmarkSelect.addEventListener("change", updateCharts);
+  benchmarkSelect.addEventListener("change", updateChart);
+  chartTypeSelect.addEventListener("change", updateChart);
 
   miriToggle.addEventListener("click", () => {
     showMiri = !showMiri;
-    updateCharts();
+    updateMiriButton();
+    updateChart();
   });
 
   // Initial load
   if (window.benchmarkData) {
-    
     const initialArch = archSelect.value;
     populateBenchmarks(initialArch);
-    updateCharts();
+    updateMiriButton();
+    updateChart();
   } else {
     document.getElementById("charts").innerHTML = "<p>Benchmark data not loaded. Please ensure data.js is present.</p>";
   }
