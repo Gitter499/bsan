@@ -27,11 +27,11 @@ fn retag_perm<'tcx>(
     let info = match pointer_ty.kind() {
         ty::Ref(_, _, mutability) => {
             let (perm_kind, access_kind) = match mutability {
-                Mutability::Not if ty_is_unpin => (
+                Mutability::Mut if ty_is_unpin => (
                     Permission::new_reserved(ty_is_freeze && !params.in_unsafe_cell, is_protected),
                     Some(AccessKind::Read),
                 ),
-                Mutability::Mut if ty_is_freeze => {
+                Mutability::Not if ty_is_freeze => {
                     if params.in_unsafe_cell {
                         (Permission::new_cell(), None)
                     } else {

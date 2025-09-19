@@ -1,5 +1,5 @@
 [package]
-name = "bsan-rt"
+name = "bsan_rt"
 version = "0.1.0"
 edition = "2024"
 
@@ -20,6 +20,4 @@ backtrace = "0.3.75"
 [lib]
 name = "bsan_rt"
 crate-type = ["staticlib"] 
-test = true     # we have unit tests
-doctest = false # but no doc tests
 
