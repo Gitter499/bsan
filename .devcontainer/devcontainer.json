@@ -5,6 +5,10 @@
 		"target": "image-dev",
 		"context": ".."
 	},
+	// Mount SSH folder
+	"mounts": [
+		"source=${localEnv:HOME}/.ssh,target=/root/.ssh,readonly,type=bind"
+	],
 	"remoteEnv": {
 		"PATH": "${containerEnv:PATH}:${containerWorkspaceFolder}"
 	},
@@ -17,7 +21,8 @@
 		"vscode": {
 			"settings": {},
 			"extensions": [
-				"rust-lang.rust-analyzer"
+				"rust-lang.rust-analyzer",
+				"ms-vscode.cpptools"
 			]
 		}
 	}
