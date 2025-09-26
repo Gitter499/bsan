@@ -1,10 +1,8 @@
 #![cfg_attr(not(test), no_std)]
 #![allow(internal_features)]
-#![allow(unused)]
 #![warn(clippy::transmute_ptr_to_ptr)]
 #![warn(clippy::borrow_as_ptr)]
 #![feature(sync_unsafe_cell)]
-#![feature(strict_overflow_ops)]
 #![feature(thread_local)]
 #![feature(allocator_api)]
 #![feature(alloc_layout_extra)]
@@ -20,6 +18,7 @@ extern crate alloc;
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use core::fmt::Debug;
+use core::mem::MaybeUninit;
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 use core::ptr::NonNull;
@@ -44,13 +43,12 @@ mod span;
 use span::Span;
 
 mod memory;
-use memory::hooks::BsanAllocHooks;
 
 mod errors;
 
 use crate::borrow_tracker::tree::Tree;
 use crate::errors::BorsanResult;
-use crate::memory::{hooks, Heapable};
+use crate::memory::hooks;
 
 macro_rules! println {
     ($($arg:tt)*) => {
@@ -194,6 +192,7 @@ impl Provenance {
 
 /// A sumtype that represents the base address of `AllocInfo` and used as a pointer to
 /// the next free list `AllocInfo` object
+#[derive(Copy, Clone)]
 pub union FreeListAddrUnion {
     free_list_next: Option<NonNull<AllocInfo>>,
     // Must be a raw pointer for union field access safety
@@ -280,22 +279,22 @@ static __BSAN_NULL_PROVENANCE: Provenance = Provenance::null();
 #[derive(Debug)]
 #[repr(C)]
 pub struct AllocInfo {
+    /// An identifier for this allocation.
     pub alloc_id: AllocId,
     pub base_addr: FreeListAddrUnion,
     pub size: usize,
-    pub align: usize,
     pub tree_lock: Mutex<Option<tree::Tree<hooks::BsanAllocHooks>>>,
 }
 
-/// # Safety
-/// Values of type `AllocInfo` can fit within the size of a heap chunk.
-unsafe impl Heapable<AllocInfo> for AllocInfo {
-    fn next(&mut self) -> *mut Option<NonNull<AllocInfo>> {
-        // we are re-using the space of base_addr to store the free list pointer
-        // SAFETY: this is safe because both union fields are raw pointers
-        unsafe { &raw mut self.base_addr.free_list_next }
+impl AllocInfo {
+    unsafe fn force_dealloc(&mut self) {
+        self.alloc_id = AllocId::invalid();
+        self.base_addr = FreeListAddrUnion { base_addr: ptr::null_mut() };
+        self.size = 0;
+        self.tree_lock.lock().take();
     }
 }
+
 /// Initializes the global state of the runtime library.
 /// The safety of this library is entirely dependent on this
 /// function having been executed. We assume the global invariant that
@@ -330,18 +329,16 @@ unsafe extern "C-unwind" fn __bsan_retag(
     alloc_id: AllocId,
     bor_tag: BorTag,
     alloc_info: *mut AllocInfo,
-    protector_slot: *mut BorTag,
 ) -> BorTag {
     let global_ctx = unsafe { global_ctx() };
     let local_ctx = unsafe { local_ctx_mut() };
     let prov = Provenance { alloc_id, bor_tag, alloc_info };
     let retag_info = unsafe { RetagInfo::from_raw(access_size, perm) };
-    /*
+
     BorrowTracker::new(prov, object_addr, Some(access_size))
         .and_then(|opt| opt.map(|bt| bt.retag(global_ctx, local_ctx, retag_info)).transpose())
         .unwrap_or_else(|err| handle_err!(err, global_ctx))
-        .unwrap_or(bor_tag)*/
-    BorTag(0)
+        .unwrap_or(bor_tag)
 }
 
 /// Records a read access of size `access_size` at the given address `addr` using the provenance `prov`.
@@ -420,7 +417,6 @@ unsafe fn bsan_alloc(
             alloc_id,
             base_addr: FreeListAddrUnion { base_addr },
             size,
-            align: 0,
             tree_lock: Mutex::new(None),
         })?
     };
@@ -522,21 +518,89 @@ unsafe extern "C-unwind" fn __bsan_shadow_store_vector(
         .unwrap_or_else(|info| ctx.handle_error(info.into()));
 }
 
-/// Pushes a shadow stack frame
+/// Reserves a stack slot for allocation metadata.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __bsan_push_frame() {
-    let ctx = unsafe { global_ctx() };
+unsafe extern "C" fn __bsan_reserve_stack_slot() -> NonNull<AllocInfo> {
+    let global_ctx = unsafe { global_ctx() };
     let local_ctx = unsafe { local_ctx_mut() };
-    local_ctx.push_frame().unwrap_or_else(|info| ctx.handle_error(info));
+    local_ctx.allocas.reserve_slots(1).unwrap_or_else(|info| global_ctx.handle_error(info.into()))
 }
 
-/// Pops a shadow stack frame, deallocating all shadow allocations created by `bsan_alloc_stack`
+/// Initializes stack allocation metadata in-place.
 #[unsafe(no_mangle)]
-unsafe extern "C-unwind" fn __bsan_pop_frame() {
-    let local_ctx: &mut LocalCtx = unsafe { local_ctx_mut() };
+unsafe extern "C" fn __bsan_alloc_in_place(
+    base_addr: *mut c_void,
+    size: usize,
+    alloc_id: AllocId,
+    bor_tag: BorTag,
+    alloc_info: NonNull<MaybeUninit<AllocInfo>>,
+) {
+    let ctx = unsafe { global_ctx() };
+    bsan_alloc_in_place(ctx, base_addr, size, alloc_id, bor_tag, alloc_info)
+        .unwrap_or_else(|info| ctx.handle_error(info))
+}
+
+#[inline]
+fn bsan_alloc_in_place(
+    global_ctx: &GlobalCtx,
+    base_addr: *mut c_void,
+    size: usize,
+    alloc_id: AllocId,
+    bor_tag: BorTag,
+    mut alloc_info: NonNull<MaybeUninit<AllocInfo>>,
+) -> BorsanResult<()> {
     unsafe {
-        local_ctx.pop_frame();
+        alloc_info.as_mut().write(AllocInfo {
+            alloc_id,
+            base_addr: FreeListAddrUnion { base_addr },
+            size,
+            tree_lock: Mutex::new(Some(Tree::new_in(
+                bor_tag,
+                Size::from_bytes(size),
+                Span::new(),
+                global_ctx.allocator(),
+            ))),
+        });
     }
+    Ok(())
+}
+
+/// Pushes a stack frame
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __bsan_push_retag_frame() {
+    let global_ctx = unsafe { global_ctx() };
+    let local_ctx = unsafe { local_ctx_mut() };
+    local_ctx
+        .protected_tags
+        .push_frame()
+        .unwrap_or_else(|info| global_ctx.handle_error(info.into()));
+}
+
+/// Pushes a stack frame
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __bsan_push_alloca_frame() {
+    let ctx = unsafe { global_ctx() };
+    let local_ctx = unsafe { local_ctx_mut() };
+    local_ctx.allocas.push_frame().unwrap_or_else(|info| ctx.handle_error(info.into()))
+}
+
+/// Pushes a stack frame
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __bsan_pop_alloca_frame() {
+    let local_ctx = unsafe { local_ctx_mut() };
+    for info in local_ctx.allocas.current_frame_mut() {
+        unsafe { info.force_dealloc() };
+    }
+    unsafe { local_ctx.allocas.pop_frame() }
+}
+
+/// Pushes a stack frame
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __bsan_pop_retag_frame() {
+    let global_ctx: &GlobalCtx = unsafe { global_ctx() };
+    let local_ctx = unsafe { local_ctx_mut() };
+    global_ctx.remove_protected_tags(local_ctx.protected_tags.current_frame());
+    unsafe { local_ctx.protected_tags.pop_frame() }
 }
 
 /// Marks the borrow tag for `prov` as "exposed," allowing it to be resolved to
@@ -606,9 +670,17 @@ extern "C" fn __bsan_debug_print(alloc_id: AllocId, bor_tag: BorTag, alloc_info:
     crate::println!("{prov:?}");
 }
 
+#[cfg(not(test))]
+#[panic_handler]
+fn panic(info: &PanicInfo<'_>) -> ! {
+    crate::eprintln!("The BorrowSanitizer runtime panicked!");
+    crate::eprintln!("{info}");
+    core::intrinsics::abort()
+}
+
 #[cfg(test)]
-mod test {
-    use super::*;
+mod tests {
+    use crate::*;
 
     fn with_init(unit_test: fn()) {
         unsafe { __bsan_init() };
@@ -712,11 +784,3 @@ mod test {
         });
     }
 }
-/*
-#[cfg(not(test))]
-#[panic_handler]
-fn panic(info: &PanicInfo<'_>) -> ! {
-    crate::eprintln!("The BorrowSanitizer runtime panicked!");
-    crate::eprintln!("{info}");
-    core::intrinsics::abort()
-}*/

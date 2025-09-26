@@ -5,7 +5,6 @@ use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 use core::sync::atomic::AtomicUsize;
 
-use backtrace::Backtrace;
 use bsan_shared::ProtectorKind;
 use hashbrown::{DefaultHashBuilder, HashMap};
 
@@ -105,9 +104,13 @@ impl GlobalCtx {
         tag_map.insert(bor_tag, protector_kind);
     }
 
-    pub fn remove_protected_tag(&self, bor_tag: BorTag) {
+    pub fn remove_protected_tags(&self, bor_tags: &[BorTag]) {
         let mut tag_map = self.protected_tags.lock();
-        tag_map.remove(&bor_tag);
+        for tag in bor_tags {
+            if *tag != BorTag(0) {
+                tag_map.remove(tag);
+            }
+        }
     }
 
     pub fn get_protector_kind(&self, bor_tag: BorTag) -> Option<ProtectorKind> {
@@ -117,7 +120,6 @@ impl GlobalCtx {
 
     pub fn handle_error(&self, info: ErrorInfo) -> ! {
         crate::eprintln!("An error occurred: {info:?}\n\nExiting...");
-        crate::eprintln!("{:?}", Backtrace::new());
         self.exit(1)
     }
 }

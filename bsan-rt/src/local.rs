@@ -20,26 +20,16 @@ pub static mut __BSAN_PARAM_TLS: [Provenance; TLS_SIZE] = [Provenance::wildcard(
 #[derive(Debug)]
 pub struct LocalCtx {
     pub thread_id: ThreadId,
-    pub stack: Stack<NonNull<AllocInfo>>,
+    pub allocas: Stack<AllocInfo>,
+    pub protected_tags: Stack<BorTag>,
 }
 
 impl LocalCtx {
     pub fn new(ctx: &GlobalCtx) -> BorsanResult<Self> {
         let thread_id = ctx.new_thread_id();
-        let stack = Stack::<NonNull<AllocInfo>>::new(ctx)?;
-        Ok(Self { thread_id, stack })
-    }
-
-    #[inline]
-    pub fn push_frame(&mut self) -> BorsanResult<()> {
-        Ok(self.stack.push_frame()?)
-    }
-
-    /// # Safety
-    /// A frame must have been pushed
-    #[inline]
-    pub unsafe fn pop_frame(&mut self) {
-        unsafe { self.stack.pop_frame() }
+        let allocas = Stack::<AllocInfo>::new(*ctx.hooks())?;
+        let protected_tags = Stack::<BorTag>::new(*ctx.hooks())?;
+        Ok(Self { thread_id, allocas, protected_tags })
     }
 }
 
