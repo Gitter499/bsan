@@ -22,7 +22,7 @@ const createChart = (architecture, benchmark_with_suffix, chartType) => {
 
   const tool_map = {
     [`./target/release/${benchmark}`]: "native",
-    [`./${benchmark}`]: "BSAN",
+    [`./${benchmark}`]: "BorrowSanitizer",
     [`cargo +nightly miri run -p programs --bin ${benchmark}`]: "Miri",
   };
 
