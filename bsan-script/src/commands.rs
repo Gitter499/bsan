@@ -48,7 +48,7 @@ impl Command {
                 c.miri(env, &args)?;
                 Ok(())
             }),
-            Command::Inst { file, args } => Self::inst(env, file, &args),
+            Command::Inst { file, debug, args } => Self::inst(env, file, debug, &args),
         }
     }
 
@@ -115,9 +115,15 @@ impl Command {
         Ok(())
     }
 
-    fn inst(env: &mut BsanEnv, file: String, args: &[String]) -> Result<()> {
+    fn inst(env: &mut BsanEnv, file: String, debug: bool, args: &[String]) -> Result<()> {
         let plugin = env.build_artifact(BsanPass, &[])?;
-        let runtime = env.build_artifact(BsanRt, &[])?;
+
+        let runtime = if debug {
+            env.build_artifact(BsanRt, &["--features".to_string(), "debug".to_string()])?
+        } else {
+            env.build_artifact(BsanRt, &[])?
+        };
+
         let driver = env.build_artifact(BsanDriver, &[])?;
         let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
 
