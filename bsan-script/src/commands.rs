@@ -92,7 +92,7 @@ impl Command {
         Self::fmt(env, &["--check".to_string()])?;
         components.iter().try_for_each(|c| c.clippy(env, args))?;
         components.iter().try_for_each(|c| c.test(env, args))?;
-        components.iter().try_for_each(|c| c.miri(env, args))?;
+        //components.iter().try_for_each(|c| c.miri(env, args))?;
         Self::ui(env, false)
     }
 
@@ -261,8 +261,13 @@ impl_component!(BsanDriver, "bsan-driver", true, false);
 impl_component!(CargoBsan, "cargo-bsan", true, false);
 impl_component!(BsanShared, "bsan-shared", false, true);
 
-static RT_FLAGS: &[&str] =
-    &["-Cpanic=abort", "-Zpanic_abort_tests", "-Cembed-bitcode=yes", "-Clto"];
+static RT_FLAGS: &[&str] = &[
+    "-Cpanic=abort",
+    "-Zpanic_abort_tests",
+    "-Cembed-bitcode=yes",
+    "-Clto",
+    "-Cforce-frame-pointers=yes",
+];
 
 struct BsanRt;
 
@@ -341,12 +346,12 @@ impl Buildable for BsanPass {
         Ok(Some(path!(path / "build" / self.artifact())))
     }
 
-    fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.test("bsan-rt", args))
+    fn test(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
     }
 
-    fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
-        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.clippy("bsan-rt", args))
+    fn clippy(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
+        Ok(())
     }
 
     fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {

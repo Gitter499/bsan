@@ -19,17 +19,15 @@ pub static mut __BSAN_PARAM_TLS: [Provenance; TLS_SIZE] = [Provenance::wildcard(
 
 #[derive(Debug)]
 pub struct LocalCtx {
-    pub thread_id: ThreadId,
     pub allocas: Stack<AllocInfo>,
     pub protected_tags: Stack<BorTag>,
 }
 
 impl LocalCtx {
     pub fn new(ctx: &GlobalCtx) -> BorsanResult<Self> {
-        let thread_id = ctx.new_thread_id();
         let allocas = Stack::<AllocInfo>::new(*ctx.hooks())?;
         let protected_tags = Stack::<BorTag>::new(*ctx.hooks())?;
-        Ok(Self { thread_id, allocas, protected_tags })
+        Ok(Self { allocas, protected_tags })
     }
 }
 
@@ -55,7 +53,7 @@ pub unsafe fn init_local_ctx(ctx: &GlobalCtx) -> BorsanResult<&LocalCtx> {
 /// on the assumption that the current thread remains initialized.
 #[inline]
 pub unsafe fn deinit_local_ctx() {
-    unsafe { ptr::replace(LOCAL_CTX.get(), MaybeUninit::uninit()).assume_init() };
+    unsafe { drop(ptr::replace(LOCAL_CTX.get(), MaybeUninit::uninit()).assume_init()) };
 }
 
 /// # Safety
@@ -71,8 +69,4 @@ pub unsafe fn local_ctx<'a>() -> &'a LocalCtx {
 pub unsafe fn local_ctx_mut<'a>() -> &'a mut LocalCtx {
     let ctx = LOCAL_CTX.get();
     unsafe { &mut *ctx.cast::<local::LocalCtx>() }
-}
-
-impl Drop for LocalCtx {
-    fn drop(&mut self) {}
 }

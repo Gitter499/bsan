@@ -13,6 +13,9 @@ const char kBsanModuleDtorName[] = "bsan.module_dtor";
 #define BSAN_FN(name) BSAN_PREFIX name
 
 const char kBsanPrefix[] = BSAN_FN();
+const char kBsanRetagPrefix[] = BSAN_FN("retag_");
+const char kBsanIntrinsicRetagPlaceName[] = BSAN_FN("retag_place");
+const char kBsanIntrinsicRetagOperandName[] = BSAN_FN("retag_operand");
 
 const char kBsanFuncInitName[] = BSAN_FN("init");
 const char kBsanFuncDeinitName[] = BSAN_FN("deinit");
@@ -36,15 +39,15 @@ const char kBsanFuncRetagName[] = BSAN_FN("retag");
 const char kBsanFuncAllocName[] = BSAN_FN("alloc");
 
 const char kBsanFuncReserveStackSlotName[] = BSAN_FN("reserve_stack_slot");
-const char kBsanFuncAllocInPlace[] = BSAN_FN("alloc_in_place");
+const char kBsanFuncAllocStack[] = BSAN_FN("alloc_stack");
 
 const char kBsanFuncNewBorrowTagName[] = BSAN_FN("new_tag");
 const char kBsanFuncNewAllocIDName[] = BSAN_FN("new_alloc_id");
 const char kBsanFuncDeallocName[] = BSAN_FN("dealloc");
+const char kBsanFuncDeallocWeakName[] = BSAN_FN("dealloc_weak");
 const char kBsanFuncExposeTagName[] = BSAN_FN("expose_tag");
 const char kBsanFuncReadName[] = BSAN_FN("read");
 const char kBsanFuncWriteName[] = BSAN_FN("write");
-
 
 // Helper functions for debugging and testing.
 #define BSAN_DEBUG_PREFIX BSAN_FN("debug_")
@@ -53,15 +56,30 @@ const char kBsanFuncWriteName[] = BSAN_FN("write");
 const char kBsanDebugPrefix[] = BSAN_DEBUG_FN();
 
 const char kBsanFuncAssertProvenanceNull[] = BSAN_DEBUG_FN("assert_null");
-const char kBsanFuncAssertProvenanceWildcard[] = BSAN_DEBUG_FN("assert_wildcard");
+const char kBsanFuncAssertProvenanceWildcard[] =
+    BSAN_DEBUG_FN("assert_wildcard");
 const char kBsanFuncAssertProvenanceValid[] = BSAN_DEBUG_FN("assert_valid");
 const char kBsanFuncAssertProvenanceInvalid[] = BSAN_DEBUG_FN("assert_invalid");
 const char kBsanFuncDebugPrint[] = BSAN_DEBUG_FN("print");
+const char kBsanFuncDebugParamTLS[] = BSAN_DEBUG_FN("param_tls");
+const char kBsanFuncDebugRetvalTLS[] = BSAN_DEBUG_FN("retval_tls");
 
 const char kBsanParamTLSName[] = "__BSAN_PARAM_TLS";
 const char kBsanRetvalTLSName[] = "__BSAN_RETVAL_TLS";
+const char kBsanBorTagCounterName[] = "__BSAN_BOR_TAG_CTR";
+const char kBsanAllocIdCounterName[] = "__BSAN_ALLOC_ID_CTR";
 
 static const unsigned kTLSSize = 100;
+// Helper functions for debugging and testing.
+#define RUST_SHIM_PREFIX "__rust_"
+#define RUST_SHIM_FN(name) RUST_SHIM_PREFIX name
+
+const char *kRustAllocFns[] = {
+    RUST_SHIM_FN("alloc"),
+    RUST_SHIM_FN("dealloc"),
+    RUST_SHIM_FN("realloc"),
+    RUST_SHIM_FN("alloc_zeroed"),
+};
 
 struct BorrowSanitizerOptions {
   BorrowSanitizerOptions(){};
