@@ -1,19 +1,14 @@
 #include "BorrowSanitizer.h"
-
+#include "Declarations.h"
 #include "llvm/ADT/DepthFirstIterator.h"
-#include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallSet.h"
-#include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
-#include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/StackLifetime.h"
 #include "llvm/Analysis/StackSafetyAnalysis.h"
-#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/IR/CFG.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/EHPersonalities.h"
@@ -25,17 +20,13 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/DebugCounter.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/EscapeEnumerator.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 using namespace llvm;
-
-#define DEBUG_TYPE "bsan"
 
 // Command-line flags:
 static cl::opt<bool>
@@ -53,212 +44,14 @@ static cl::opt<bool>
                   cl::desc("Trust external functions to be instrumented."),
                   cl::Optional);
 
-namespace {
-struct BorrowSanitizer {
-  BorrowSanitizer(Module &M)
-      : UseCtorComdat(ClWithComdat), TrustExtern(ClTrustExtern) {
-    C = &(M.getContext());
-    DL = &M.getDataLayout();
-    TargetTriple = Triple(M.getTargetTriple());
-
-    LongSize = M.getDataLayout().getPointerSizeInBits();
-
-    Int8Ty = Type::getInt8Ty(*C);
-    Int16Ty = Type::getInt16Ty(*C);
-    Int64Ty = Type::getInt64Ty(*C);
-    PtrTy = PointerType::getUnqual(*C);
-    IntptrTy = Type::getIntNTy(*C, LongSize);
-
-    ProvenanceTy = StructType::get(IntptrTy, IntptrTy, PtrTy);
-    ProvenanceAlign = DL->getABITypeAlign(ProvenanceTy);
-    ProvenanceSize = ConstantInt::get(IntptrTy, kProvenanceSize);
-
-    Zero = ConstantInt::get(IntptrTy, 0);
-    One = ConstantInt::get(IntptrTy, 1);
-
-    True = ConstantInt::get(Int8Ty, 1);
-    False = ConstantInt::get(Int8Ty, 0);
-
-    Constant *InvalidPtr = ConstantPointerNull::get(PtrTy);
-
-    WildcardProvenance = ProvenanceScalar(Zero, Zero, InvalidPtr);
-    InvalidProvenance = ProvenanceScalar(One, Zero, InvalidPtr);
-  }
-  bool instrumentModule(Module &);
-  bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM,
-                          const StackSafetyGlobalInfo *const SSGI);
-
-  // Adds thread-local global variables for passing the provenance for
-  // arguments and return values
-  void createUserspaceApi(Module &M, const TargetLibraryInfo &TLI);
-
-  TypeSize getAllocaSizeInBytes(const AllocaInst &AI) const {
-    return *AI.getAllocationSize(AI.getDataLayout());
-  }
-
-private:
-  friend struct ThrowingCallTransformer;
-  friend struct BorrowSanitizerVisitor;
-
-  void initializeCallbacks(Module &M, const TargetLibraryInfo &TLI);
-  void instrumentGlobals(IRBuilder<> &IRB, Module &M, bool *CtorComdat);
-  Instruction *createBsanModuleDtor(Module &M);
-
-  bool UseCtorComdat;
-  bool TrustExtern;
-  LLVMContext *C;
-  const DataLayout *DL;
-
-  int LongSize;
-  Triple TargetTriple;
-  Type *Int8Ty;
-  Type *Int16Ty;
-  Type *Int64Ty;
-  PointerType *PtrTy;
-
-  Type *IntptrTy;
-  Align IntptrAlign;
-
-  StructType *ProvenanceTy;
-  Align ProvenanceAlign;
-  Value *ProvenanceSize;
-
-  bool CallbacksInitialized = false;
-
-  Function *BsanCtorFunction = nullptr;
-  Function *BsanDtorFunction = nullptr;
-
-  FunctionCallee BsanFuncRetag;
-  FunctionCallee BsanFuncShadowCopy;
-  FunctionCallee BsanFuncShadowClear;
-  FunctionCallee BsanFuncGetShadowSrc;
-  FunctionCallee BsanFuncGetShadowDest;
-
-  FunctionCallee BsanFuncReserveStackSlot;
-  FunctionCallee BsanFuncAllocStack;
-
-  FunctionCallee BsanFuncPushAllocaFrame;
-  FunctionCallee BsanFuncPushRetagFrame;
-
-  FunctionCallee BsanFuncPopAllocaFrame;
-  FunctionCallee BsanFuncPopRetagFrame;
-
-  FunctionCallee BsanFuncAlloc;
-  FunctionCallee BsanFuncDealloc;
-  FunctionCallee BsanFuncDeallocWeak;
-  FunctionCallee BsanFuncExposeTag;
-  FunctionCallee BsanFuncRead;
-  FunctionCallee BsanFuncWrite;
-
-  FunctionCallee BsanFuncShadowLoadVector;
-  FunctionCallee BsanFuncShadowStoreVector;
-
-  FunctionCallee BsanFuncAssertProvenanceInvalid;
-  FunctionCallee BsanFuncAssertProvenanceValid;
-  FunctionCallee BsanFuncAssertProvenanceNull;
-  FunctionCallee BsanFuncAssertProvenanceWildcard;
-  FunctionCallee BsanFuncDebugPrint;
-
-  FunctionCallee BsanFuncDebugParamTLS;
-  FunctionCallee BsanFuncDebugRetvalTLS;
-
-  FunctionCallee DefaultPersonalityFn;
-
-  ProvenanceScalar WildcardProvenance;
-  ProvenanceScalar InvalidProvenance;
-
-  // Thread-local storage for paramters
-  // and return values.
-  Value *ParamTLS = nullptr;
-  Value *RetvalTLS = nullptr;
-  Value *AllocIdCounter = nullptr;
-  Value *BorTagCounter = nullptr;
-
-  Constant *Zero = nullptr;
-  Constant *One = nullptr;
-
-  Constant *True = nullptr;
-  Constant *False = nullptr;
-};
-
-// If a function might unwind, then we need to insert a cleanup block
-// before it returns so that we can invalidate our stack metadata. Since this
-// involves a change to the CFG, we do this before inserting our
-// instrumentation; otherwise we would risk invalidating the lifetimes of
-// existing instructions during the pass. This is equivalent to LLVM's
-// `EscapeEnumerator`, but we cannot reuse that, since our retag intrinsics are
-// currently set to unwind, so they're accidentally caught in the
-// transformation. In the future, when we adjust that behavior, we might
-// consider replacing this with `EscapeEnumerator`.
-struct ThrowingCallTransformer : public InstVisitor<ThrowingCallTransformer> {
-  Function &F;
-  LLVMContext *C;
-  BorrowSanitizer &BS;
-  const TargetLibraryInfo *TLI;
-  SmallVector<CallInst *> ThrowingCalls;
-  DominatorTree &DT;
-
-  ThrowingCallTransformer(Function &F, BorrowSanitizer &BS,
-                          const TargetLibraryInfo *TLI, DominatorTree &DT)
-      : F(F), BS(BS), C(BS.C), TLI(TLI), DT(DT) {}
-
-  bool run() {
-    DomTreeUpdater DTU =
-        DomTreeUpdater(DT, DomTreeUpdater::UpdateStrategy::Lazy);
-
-    for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I)
-      InstVisitor<ThrowingCallTransformer>::visit(*I);
-
-    if (ThrowingCalls.empty())
-      return false;
-
-    for (CallInst *CI : llvm::reverse(ThrowingCalls)) {
-      IRBuilder<> IRB(CI);
-      BasicBlock *CallingBlock = CI->getParent();
-      Function *Callee = CI->getCalledFunction();
-      BasicBlock *CleanupBB = BasicBlock::Create(*BS.C, "cleanup", &F);
-      Type *ExnTy = StructType::get(BS.PtrTy, Type::getInt32Ty(*BS.C));
-      if (!F.hasPersonalityFn()) {
-        F.setPersonalityFn(cast<Constant>(BS.DefaultPersonalityFn.getCallee()));
-      }
-
-      if (isScopedEHPersonality(classifyEHPersonality(F.getPersonalityFn())))
-        report_fatal_error("Scoped EH not supported");
-
-      LandingPadInst *LPad =
-          LandingPadInst::Create(ExnTy, 1, "cleanup.lpad", CleanupBB);
-      LPad->setCleanup(true);
-
-      ResumeInst *RI = ResumeInst::Create(LPad, CleanupBB);
-      changeToInvokeAndSplitBasicBlock(CI, CleanupBB, &DTU);
-    }
-    DTU.flush();
-    return true;
-  }
-
-  using InstVisitor<ThrowingCallTransformer>::visit;
-  void visitCallBase(CallBase &CB) {
-    if (CallInst *CI = dyn_cast<CallInst>(&CB)) {
-      if (!CI->doesNotThrow() && !CI->isMustTailCall()) {
-        Function *Callee = CI->getCalledFunction();
-        // We exclude retag intrinsics
-        if (Callee && Callee->getName().starts_with(kBsanPrefix))
-          return;
-        ThrowingCalls.push_back(CI);
-      }
-    }
-  }
-};
-
-// This class implements function-level instrumentation.
-struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
+class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
+  friend class InstVisitor<BorrowSanitizerVisitor>;
   Function &F;
   BorrowSanitizer &BS;
   DIBuilder DIB;
   LLVMContext *C;
 
   DominatorTree &DT;
-  const StackSafetyGlobalInfo *SSGI;
   const TargetLibraryInfo *TLI;
 
   // The first instruction in the body of the function, which is set to be
@@ -360,11 +153,53 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // every exit point.
   std::unique_ptr<StackLifetime> LifetimeInfo;
 
+public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
-                         const StackSafetyGlobalInfo *const SSGI,
                          const TargetLibraryInfo &TLI, DominatorTree &DT)
       : F(F), BS(BS), DIB(*F.getParent(), /*AllowUnresolved*/ false), C(BS.C),
-        TLI(&TLI), SSGI(SSGI), CurrentBlock(&F.getEntryBlock()), DT(DT) {}
+        TLI(&TLI), CurrentBlock(&F.getEntryBlock()), DT(DT) {}
+
+  bool run() {
+    EscapeEnumerator EE(F, "bsan_cleanup", true);
+    while (IRBuilder<> *AtExit = EE.Next()) {
+    }
+
+    for (BasicBlock *BB :
+         ReversePostOrderTraversal<BasicBlock *>(&F.getEntryBlock())) {
+      populateBlock(BB);
+    }
+
+    if (Instructions.empty())
+      return false;
+
+    initStack();
+
+    for (auto const &[BB, Insts] : Instructions) {
+      CurrentBlock = BB;
+      for (Instruction *I : Insts) {
+        InstVisitor<BorrowSanitizerVisitor>::visit(*I);
+      }
+    }
+
+    patchPHINodes();
+
+    for (CallBase *CB : ToRemove) {
+      CB->eraseFromParent();
+    }
+
+    return true;
+  }
+
+private:
+  Value *offsetPointer(IRBuilder<> &IRB, const DataLayout *DL, Value *Pointer,
+                       Value *Offset) {
+    if (ConstantInt *CI = dyn_cast<ConstantInt>(Offset))
+      if (CI->isZero())
+        return Pointer;
+    Value *Base = IRB.CreatePointerCast(Pointer, IRB.getIntPtrTy(*DL));
+    Base = IRB.CreateAdd(Base, Offset);
+    return IRB.CreateIntToPtr(Base, IRB.getPtrTy());
+  }
 
   ProvenanceScalar assertProvenanceScalar(Value *V) {
     return assertProvenanceScalar({V, 0});
@@ -419,7 +254,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
       report_fatal_error(
           "Expected vector provenance, but found scalar provenance!");
     }
-    return wildcardProvenanceVector(IRB, E);
+    return ProvenanceVector::wildcard(IRB, BS.PL, E);
   }
 
   Provenance assertProvenance(IRBuilder<> &IRB, ProvenanceComponent &Comp,
@@ -429,7 +264,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
   Provenance assertProvenance(IRBuilder<> &IRB, ProvenanceComponent &Comp,
                               ProvenanceKey Key) {
-    return assertProvenance(IRB, CurrentBlock, Comp, Key);
+    return assertProvenance(IRB, CurrentBlock, Comp.Kind, Comp.Elems, Key);
   }
 
   // Asserts that there is either a provenance value at the given index, or that
@@ -438,21 +273,18 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // but do not care whether it's a vector or scalar. Checks for consistency
   // against a given provenance component.
   Provenance assertProvenance(IRBuilder<> &IRB, BasicBlock *BB,
-                              ProvenanceComponent &Comp, ProvenanceKey Key) {
+                              ProvenanceKind Kind, ElementCount &Elems,
+                              ProvenanceKey Key) {
     std::optional<Provenance> OptProv = getProvenance(BB, Key);
     if (OptProv.has_value()) {
       Provenance Prov = OptProv.value();
-      if (Prov.isVector() != Comp.isVector()) {
+      if (Prov.Kind != Kind) {
         report_fatal_error("Provenance type mismatch.");
       }
       return Prov;
     }
 
-    if (Comp.isVector()) {
-      return wildcardProvenanceVector(IRB, Comp.Elems);
-    }
-
-    return BS.WildcardProvenance;
+    return Provenance::wildcard(IRB, BS.PL, Elems, Kind);
   }
 
   // Asserts that there is either a provenance value at the given index, or that
@@ -486,7 +318,8 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         }
         ProvenancePointer ArgProvenancePtr =
             ArgumentProvenance[Arg][Key.second];
-        Provenance ArgProvenance = loadProvenance(EntryIRB, ArgProvenancePtr);
+        Provenance ArgProvenance =
+            Provenance::load(EntryIRB, BS.PL, ArgProvenancePtr);
         setProvenance(Key, ArgProvenance);
         return ArgProvenance;
       }
@@ -573,7 +406,8 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     switch (CurrentTy->getTypeID()) {
     case Type::PointerTyID: {
       ProvenanceComponent Comp(ByteOffset, TypeSize, ProvOffset, BS.One,
-                               ElementCount::get(1, false));
+                               ElementCount::get(1, false),
+                               ProvenanceKind::Scalar);
       Components.push_back(Comp);
       NextProvOffset = IRB.CreateAdd(ProvOffset, BS.One);
     } break;
@@ -599,7 +433,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         NextProvOffset = POffset;
       }
     } break;
-    case Type::ScalableVectorTyID:
+
     case Type::FixedVectorTyID: {
       FixedVectorType *VT = cast<FixedVectorType>(CurrentTy);
       Value *CurrByteOffset = ByteOffset;
@@ -660,53 +494,27 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // address.
   void storeProvenanceToShadow(IRBuilder<> &IRB, Value *ObjAddr,
                                Provenance Prov) {
-    if (Prov.isVector()) {
-      ProvenanceVector PV = Prov.assertVector();
 
+    ProvenancePointer ProvPtr;
+    if (Prov.isVector()) {
       Value *IdDest, *TagDest, *InfoDest;
       std::tie(IdDest, TagDest, InfoDest) =
-          allocateProvenanceVectors(IRB, PV.Elems);
+          allocateProvenanceVectors(IRB, Prov.Elems);
 
-      StoreInst *Id = IRB.CreateStore(PV.IdVector, IdDest);
-      Id->setVolatile(1);
+      ProvenancePointer ProvPtr = ProvenancePointer(
+          IdDest, TagDest, InfoDest, Prov.Elems, ProvenanceKind::Vector);
+      Prov.store(IRB, BS.PL, ProvPtr);
 
-      StoreInst *Tag = IRB.CreateStore(PV.TagVector, TagDest);
-      Tag->setVolatile(1);
-
-      StoreInst *Info = IRB.CreateStore(PV.InfoVector, InfoDest);
-      Info->setVolatile(1);
-
-      IRB.CreateCall(
-          BS.BsanFuncShadowStoreVector,
-          {ObjAddr, PV.Length, PV.IdVector, PV.TagVector, PV.InfoVector});
+      Value *ElemCount = IRB.CreateElementCount(BS.IntptrTy, Prov.Elems);
+      IRB.CreateCall(BS.BsanFuncShadowStoreVector,
+                     {ObjAddr, ElemCount, IdDest, TagDest, InfoDest});
     } else {
-      ProvenanceScalar PS = Prov.assertScalar();
       Value *ShadowPointer =
           IRB.CreateCall(BS.BsanFuncGetShadowDest, {ObjAddr});
-      storeProvenanceScalar(IRB, PS, ShadowPointer);
+      ProvenancePointer Dest =
+          ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
+      Prov.store(IRB, BS.PL, Dest);
     }
-  }
-
-  // Stores a provenance values into an array, where we expect that each element
-  // of the array will be a provenance value.
-  Value *storeProvenance(IRBuilder<> &IRB, Provenance Prov, Value *Dest) {
-    if (Prov.isVector()) {
-      ProvenanceVector VP = Prov.assertVector();
-      Value *IdDest, *TagDest, *InfoDest, *Next;
-      std::tie(IdDest, TagDest, InfoDest, Next) =
-          getProvenanceVectorElements(IRB, Dest, VP.Elems);
-      StoreInst *Id = IRB.CreateStore(VP.IdVector, IdDest);
-      Id->setVolatile(1);
-      StoreInst *Tag = IRB.CreateStore(VP.TagVector, TagDest);
-      Tag->setVolatile(1);
-      StoreInst *Info = IRB.CreateStore(VP.InfoVector, InfoDest);
-      Info->setVolatile(1);
-      return Next;
-    }
-
-    ProvenanceScalar PS = Prov.assertScalar();
-    storeProvenanceScalar(IRB, PS, Dest);
-    return offsetPointer(IRB, Dest, BS.ProvenanceSize);
   }
 
   // Loads a provenance value into shadow memory starting at the given object
@@ -714,6 +522,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   Provenance loadProvenanceFromShadow(IRBuilder<> &IRB,
                                       ProvenanceComponent &Comp,
                                       Value *ObjAddr) {
+    ProvenancePointer ProvPtr;
     if (Comp.isVector()) {
       // We're dealing with a scalable vector of pointers.
       // First, we create vectors to store each of the three components
@@ -731,100 +540,14 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
       IRB.CreateCall(
           BS.BsanFuncShadowLoadVector,
           {ObjAddr, Comp.NumProvenanceValues, IdVector, TagVector, InfoVector});
-      return loadProvenanceVector(IRB, IdVector, TagVector, InfoVector,
-                                  Comp.NumProvenanceValues, Comp.Elems);
+
+      ProvPtr =
+          ProvenancePointerVector(IdVector, TagVector, InfoVector, Comp.Elems);
+    } else {
+      Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowSrc, {ObjAddr});
+      ProvPtr = ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
     }
-
-    Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowSrc, {ObjAddr});
-    return loadProvenanceScalar(IRB, ShadowPointer);
-  }
-
-  // Loads a provenance value from main memory
-  Provenance loadProvenance(IRBuilder<> &IRB, ProvenancePointer Prov) {
-    if (Prov.isVector()) {
-      Value *Id, *Tag, *Info, *Next;
-      std::tie(Id, Tag, Info, Next) =
-          getProvenanceVectorElements(IRB, Prov.Base, Prov.Elems);
-      return loadProvenanceVector(IRB, Id, Tag, Info, Prov.Length, Prov.Elems);
-    }
-    return loadProvenanceScalar(IRB, Prov.Base);
-  }
-
-  // Loads a vector of provenance values from either shadow or main memory.
-  ProvenanceVector loadProvenanceVector(IRBuilder<> &IRB, Value *IdPtr,
-                                        Value *TagPtr, Value *InfoPtr,
-                                        Value *Length, ElementCount Elems) {
-    LoadInst *IdVector =
-        IRB.CreateLoad(VectorType::get(BS.IntptrTy, Elems), IdPtr);
-    IdVector->setVolatile(1);
-    LoadInst *TagVector =
-        IRB.CreateLoad(VectorType::get(BS.IntptrTy, Elems), TagPtr);
-    TagVector->setVolatile(1);
-    LoadInst *InfoVector =
-        IRB.CreateLoad(VectorType::get(BS.PtrTy, Elems), InfoPtr);
-    InfoVector->setVolatile(1);
-    return ProvenanceVector(IdVector, TagVector, InfoVector, Length, Elems);
-  }
-
-  // Loads a single provenance value from either shadow or main memory.
-  ProvenanceScalar loadProvenanceScalar(IRBuilder<> &IRB, Value *Src) {
-    Value *IdPtr, *TagPtr, *InfoPtr;
-    std::tie(IdPtr, TagPtr, InfoPtr) = getProvenanceElements(IRB, Src);
-    LoadInst *Id = IRB.CreateLoad(BS.IntptrTy, IdPtr);
-    Id->setVolatile(1);
-    LoadInst *Tag = IRB.CreateLoad(BS.IntptrTy, TagPtr);
-    Tag->setVolatile(1);
-    LoadInst *Info = IRB.CreateLoad(BS.PtrTy, InfoPtr);
-    Info->setVolatile(1);
-    return ProvenanceScalar(Id, Tag, Info);
-  }
-
-  // Stores a single provenance value to either shadow or main memory.
-  void storeProvenanceScalar(IRBuilder<> &IRB, ProvenanceScalar Prov,
-                             Value *Dest) {
-    Value *IdPtr, *TagPtr, *InfoPtr;
-    std::tie(IdPtr, TagPtr, InfoPtr) = getProvenanceElements(IRB, Dest);
-    StoreInst *Id = IRB.CreateStore(Prov.Id, IdPtr);
-    Id->setVolatile(1);
-    StoreInst *Tag = IRB.CreateStore(Prov.Tag, TagPtr);
-    Tag->setVolatile(1);
-    StoreInst *Info = IRB.CreateStore(Prov.Info, InfoPtr);
-    Info->setVolatile(1);
-  }
-
-  std::tuple<Value *, Value *, Value *, Value *>
-  getProvenanceVectorElements(IRBuilder<> &IRB, Value *ProvArray,
-                              ElementCount Elems) {
-    Value *IdVecSize = IRB.CreateTypeSize(
-        BS.IntptrTy,
-        BS.DL->getTypeAllocSize(VectorType::get(BS.IntptrTy, Elems)));
-    Value *TagVecSize = IRB.CreateTypeSize(
-        BS.IntptrTy,
-        BS.DL->getTypeAllocSize(VectorType::get(BS.IntptrTy, Elems)));
-    Value *InfoVecSize = IRB.CreateTypeSize(
-        BS.IntptrTy, BS.DL->getTypeAllocSize(VectorType::get(BS.PtrTy, Elems)));
-
-    Value *IdVec = ProvArray;
-    Value *TagVec = offsetPointer(IRB, IdVec, IdVecSize);
-    Value *InfoVec = offsetPointer(IRB, TagVec, TagVecSize);
-
-    return std::make_tuple(IdVec, TagVec, InfoVec,
-                           offsetPointer(IRB, InfoVec, InfoVecSize));
-  }
-
-  // Calculates GEP offsets into each component of a provenance value.
-  std::tuple<Value *, Value *, Value *> getProvenanceElements(IRBuilder<> &IRB,
-                                                              Value *Prov) {
-    Value *ZeroIdx = ConstantInt::get(IRB.getInt64Ty(), 0);
-    // When indexing into a struct, subsequent indices must be of type i32.
-    Value *IdPtr = Prov;
-    Value *TagPtr =
-        IRB.CreateGEP(BS.ProvenanceTy, Prov,
-                      {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 1)});
-    Value *InfoPtr =
-        IRB.CreateGEP(BS.ProvenanceTy, Prov,
-                      {ZeroIdx, ConstantInt::get(IRB.getInt32Ty(), 2)});
-    return std::make_tuple(IdPtr, TagPtr, InfoPtr);
+    return Provenance::load(IRB, BS.PL, ProvPtr);
   }
 
   // Allocates vectors of each provenance component for a vector provenance
@@ -837,57 +560,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     return std::make_tuple(IdVector, TagVector, InfoVector);
   }
 
-  ProvenanceVector wildcardProvenanceVector(IRBuilder<> &IRB,
-                                            ElementCount Elems) {
-    Value *IdVector = ConstantVector::getSplat(Elems, BS.Zero);
-    Value *TagVector = ConstantVector::getSplat(Elems, BS.Zero);
-    Value *InfoVector =
-        ConstantVector::getSplat(Elems, ConstantPointerNull::get(BS.PtrTy));
-    Value *Length = IRB.CreateElementCount(BS.IntptrTy, Elems);
-    return ProvenanceVector(IdVector, TagVector, InfoVector, Length, Elems);
-  }
-
-  // A helper function to offset a pointer by the given number of bytes.
-  Value *offsetPointer(IRBuilder<> &IRB, Value *Pointer, Value *Offset) {
-    if (ConstantInt *CI = dyn_cast<ConstantInt>(Offset))
-      if (CI->isZero())
-        return Pointer;
-    Value *Base = IRB.CreatePointerCast(Pointer, BS.IntptrTy);
-    Base = IRB.CreateAdd(Base, Offset);
-    return IRB.CreateIntToPtr(Base, BS.PtrTy);
-  }
-
   // The main function of the instrumentation pass.
-  bool run() {
-    ThrowingCallTransformer Transformer(F, BS, TLI, DT);
-    Transformer.run();
-
-    for (BasicBlock *BB :
-         ReversePostOrderTraversal<BasicBlock *>(&F.getEntryBlock())) {
-      populateBlock(BB);
-    }
-
-    if (Instructions.empty())
-      return false;
-
-    initStack();
-
-    for (auto const &[BB, Insts] : Instructions) {
-      CurrentBlock = BB;
-      for (Instruction *I : Insts) {
-        InstVisitor<BorrowSanitizerVisitor>::visit(*I);
-      }
-    }
-
-    patchPHINodes();
-
-    for (CallBase *CB : ToRemove) {
-      CB->eraseFromParent();
-    }
-
-    return true;
-  }
-
   void populateBlock(BasicBlock *BB) {
     SmallVector<Instruction *> Insts;
     for (Instruction &I : *BB) {
@@ -930,18 +603,20 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
         Value *CurrentArrayByteOffset =
             EntryIRB.CreateMul(TotalNumProvenanceValues, BS.ProvenanceSize);
         Value *CurrentArraySlot =
-            offsetPointer(EntryIRB, BS.ParamTLS, CurrentArrayByteOffset);
+            offsetPointer(EntryIRB, BS.DL, BS.ParamTLS, CurrentArrayByteOffset);
         ProvenancePointer Ptr =
-            C.getPointerToProvenance(EntryIRB, CurrentArraySlot);
+            C.getPointerToProvenance(EntryIRB, BS.PL, CurrentArraySlot);
         ArgumentProvenance[&Arg].push_back(Ptr);
         TotalNumProvenanceValues =
             EntryIRB.CreateAdd(TotalNumProvenanceValues, C.NumProvenanceValues);
       }
     }
-    EntryIRB.CreateCall(BS.BsanFuncPushRetagFrame, {});
-    EntryIRB.CreateCall(BS.BsanFuncPushAllocaFrame, {});
+    if (NumFnEntryRetags > 0) {
+      EntryIRB.CreateCall(BS.BsanFuncPushRetagFrame, {});
+    }
 
     if (StaticAllocaVec.size() > 0) {
+      EntryIRB.CreateCall(BS.BsanFuncPushAllocaFrame, {});
       for (AllocaInst *AI : StaticAllocaVec) {
         if (HasLifetimeStart.contains(AI)) {
           if (HasLifetimeStart[AI].size() > 1) {
@@ -965,39 +640,12 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   void patchPHINodes() {
     IRBuilder<> EntryIRB(FnPrologueStart);
 
-    for (const auto &[PN, Prov, Idx] : ProvPHINodes) {
-      if (Prov.isVector()) {
-        ProvenanceVector ProvVec = Prov.assertVector();
-        PHINode *IdNode = cast<PHINode>(ProvVec.IdVector);
-        PHINode *TagNode = cast<PHINode>(ProvVec.TagVector);
-        PHINode *InfoNode = cast<PHINode>(ProvVec.InfoVector);
-        PHINode *LengthNode = cast<PHINode>(ProvVec.Length);
-        for (auto [V, IncomingBlock] :
-             llvm::zip(PN->incoming_values(), PN->blocks())) {
-          ProvenanceVector IncomingProv = assertProvenanceVector(
-              EntryIRB, IncomingBlock, {V, Idx}, ProvVec.Elems);
-          IdNode->setIncomingValueForBlock(IncomingBlock,
-                                           IncomingProv.IdVector);
-          TagNode->setIncomingValueForBlock(IncomingBlock,
-                                            IncomingProv.TagVector);
-          InfoNode->setIncomingValueForBlock(IncomingBlock,
-                                             IncomingProv.InfoVector);
-          LengthNode->setIncomingValueForBlock(IncomingBlock,
-                                               IncomingProv.Length);
-        }
-      } else {
-        ProvenanceScalar ProvScalar = Prov.assertScalar();
-        PHINode *IdNode = cast<PHINode>(ProvScalar.Id);
-        PHINode *TagNode = cast<PHINode>(ProvScalar.Tag);
-        PHINode *InfoNode = cast<PHINode>(ProvScalar.Info);
-        for (auto [V, IncomingBlock] :
-             llvm::zip(PN->incoming_values(), PN->blocks())) {
-          ProvenanceScalar IncomingProv =
-              assertProvenanceScalar(IncomingBlock, {V, Idx});
-          IdNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Id);
-          TagNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Tag);
-          InfoNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Info);
-        }
+    for (auto &[PN, Prov, Idx] : ProvPHINodes) {
+      for (auto [V, IncomingBlock] :
+           llvm::zip(PN->incoming_values(), PN->blocks())) {
+        Provenance IncomingProv = assertProvenance(
+            EntryIRB, IncomingBlock, Prov.Kind, Prov.Elems, {V, Idx});
+        Prov.addIncoming(IncomingBlock, IncomingProv);
       }
     }
 
@@ -1010,6 +658,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
       PHINode *InfoNode = cast<PHINode>(Prov.Info);
       Worklist.push_back(InfoNode);
       for (BasicBlock *IncomingBlock : predecessors(BB)) {
+
         ProvenanceScalar IncomingProv =
             assertAllocaProvenance(IncomingBlock, AI);
         IdNode->setIncomingValueForBlock(IncomingBlock, IncomingProv.Id);
@@ -1121,8 +770,6 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     return false;
   }
 
-  using InstVisitor<BorrowSanitizerVisitor>::visit;
-
   void handleDebugFunction(CallBase &CB, Function *F) {
     IRBuilder<> IRB(&CB);
     auto Name = F->getName();
@@ -1183,17 +830,16 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     Value *ObjAddr = CB.getOperand(0);
 
     Value *ShadowPointer = IRB.CreateCall(BS.BsanFuncGetShadowSrc, {ObjAddr});
-    ProvenanceScalar Prov = loadProvenanceScalar(IRB, ShadowPointer);
+
+    ProvenancePointerScalar ProvPtr =
+        ProvenancePointerScalar(IRB, BS.PL, ShadowPointer);
+    ProvenanceScalar Prov = Provenance::loadScalar(IRB, BS.PL, ProvPtr);
 
     Value *NewTag = newBorrowTag(IRB);
     IRB.CreateCall(BS.BsanFuncRetag,
                    {CB.getOperand(0), CB.getOperand(1), CB.getOperand(2),
                     Prov.Id, Prov.Tag, Prov.Info, NewTag});
-
-    Value *TagPtr;
-    std::tie(std::ignore, TagPtr, std::ignore) =
-        getProvenanceElements(IRB, ShadowPointer);
-    StoreInst *SI = IRB.CreateStore(NewTag, TagPtr);
+    StoreInst *SI = IRB.CreateStore(NewTag, ProvPtr.TagPtr);
     SI->setVolatile(1);
   }
 
@@ -1211,6 +857,8 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     Prov.Tag = NewTag;
     setProvenance(RetagCall, Prov);
   }
+
+  using InstVisitor<BorrowSanitizerVisitor>::visit;
 
   void visitCallBase(CallBase &CB) {
     assert(!CB.getMetadata(LLVMContext::MD_nosanitize));
@@ -1247,20 +895,22 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     // with a situation where function bindings are incorrect, which is
     // undefined behavior.
 
-    Value *TotalNumProvenanceValues = BS.Zero;
-    Value *ParamArray = BS.ParamTLS;
     Value *ParamByteWidth = BS.Zero;
+
     for (const auto &[i, Arg] : llvm::enumerate(CB.args())) {
       SmallVector<ProvenanceComponent> *Components =
           getProvenanceComponents(Before, Arg->getType());
       for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
-        TotalNumProvenanceValues = Before.CreateAdd(TotalNumProvenanceValues,
-                                                    Comp.NumProvenanceValues);
+        Value *Slot = offsetPointer(Before, BS.DL, BS.ParamTLS, ParamByteWidth);
+
+        Provenance ProvSrc = assertProvenance(Before, Comp, {Arg, Idx});
+        ProvenancePointer Dest =
+            ProvenancePointer(Before, BS.PL, Slot, Comp.Elems, ProvSrc.Kind);
+        ProvSrc.store(Before, BS.PL, Dest);
+
         Value *ByteWidth =
             Before.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
         ParamByteWidth = Before.CreateAdd(ParamByteWidth, ByteWidth);
-        Provenance Prov = assertProvenance(Before, Comp, {Arg, Idx});
-        ParamArray = storeProvenance(Before, Prov, ParamArray);
       }
     }
 
@@ -1304,20 +954,19 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
       // provenance components that we expect to be here. If the function that
       // we are calling is uninstrumented, then we need ensure that the return
       // array is populated with default values.
-      Value *TotalNumReturnProvenanceValues = BS.Zero;
 
-      Value *ReturnArray = BS.RetvalTLS;
       Value *RetvalByteWidth = BS.Zero;
 
       for (const auto &[Idx, Comp] : llvm::enumerate(*ReturnComponents)) {
-        ProvenancePointer Ptr = Comp.getPointerToProvenance(After, ReturnArray);
-        setProvenance({&CB, Idx}, loadProvenance(After, Ptr));
-        TotalNumReturnProvenanceValues = After.CreateAdd(
-            Comp.NumProvenanceValues, TotalNumReturnProvenanceValues);
+        Value *Slot =
+            offsetPointer(After, BS.DL, BS.RetvalTLS, RetvalByteWidth);
+
+        ProvenancePointer Ptr = Comp.getPointerToProvenance(After, BS.PL, Slot);
+        setProvenance({&CB, Idx}, Provenance::load(After, BS.PL, Ptr));
+
         Value *ByteWidth =
             Before.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
         RetvalByteWidth = Before.CreateAdd(RetvalByteWidth, ByteWidth);
-        ReturnArray = offsetPointer(After, ReturnArray, ByteWidth);
       }
 
       if (IsExternFunction)
@@ -1341,20 +990,17 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     PHINode *InfoNode =
         IRB.CreatePHI(PtrVector, NumIncoming, "_bsphi_vec_info");
     InfoNode->dropDbgRecords();
-    PHINode *LengthNode =
-        IRB.CreatePHI(BS.IntptrTy, NumIncoming, "_bsphi_vec_len");
-    LengthNode->dropDbgRecords();
 
-    ProvenanceVector WildcardVector = wildcardProvenanceVector(IRB, Elems);
+    ProvenanceVector WildcardVector =
+        ProvenanceVector::wildcard(IRB, BS.PL, Elems);
 
     for (BasicBlock *BB : Blocks) {
-      IdNode->addIncoming(WildcardVector.IdVector, BB);
-      TagNode->addIncoming(WildcardVector.TagVector, BB);
-      InfoNode->addIncoming(WildcardVector.InfoVector, BB);
-      LengthNode->addIncoming(WildcardVector.Length, BB);
+      IdNode->addIncoming(WildcardVector.Id, BB);
+      TagNode->addIncoming(WildcardVector.Tag, BB);
+      InfoNode->addIncoming(WildcardVector.Info, BB);
     }
 
-    return ProvenanceVector(IdNode, TagNode, InfoNode, LengthNode, Elems);
+    return ProvenanceVector(IdNode, TagNode, InfoNode, Elems);
   }
 
   ProvenanceScalar
@@ -1512,7 +1158,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     Value *Base = LI.getPointerOperand();
     for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
       ShadowFootprint Footprint = Comp.Footprint;
-      Value *ObjAddr = offsetPointer(IRB, Base, Footprint.ByteOffset);
+      Value *ObjAddr = offsetPointer(IRB, BS.DL, Base, Footprint.ByteOffset);
       Provenance Prov = loadProvenanceFromShadow(IRB, Comp, ObjAddr);
       setProvenance({&LI, Idx}, Prov);
     }
@@ -1535,7 +1181,7 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
     for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
       ShadowFootprint Footprint = Comp.Footprint;
-      Value *ObjAddr = offsetPointer(IRB, Base, Footprint.ByteOffset);
+      Value *ObjAddr = offsetPointer(IRB, BS.DL, Base, Footprint.ByteOffset);
 
       Provenance Prov;
       ProvenanceKey Key = {SI.getValueOperand(), Idx};
@@ -1635,9 +1281,9 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
       Value *Idx = EE.getIndexOperand();
 
       Value *Id, *Tag, *Info;
-      Id = IRB.CreateExtractElement(VP.IdVector, Idx);
-      Tag = IRB.CreateExtractElement(VP.TagVector, Idx);
-      Info = IRB.CreateExtractElement(VP.InfoVector, Idx);
+      Id = IRB.CreateExtractElement(VP.Id, Idx);
+      Tag = IRB.CreateExtractElement(VP.Tag, Idx);
+      Info = IRB.CreateExtractElement(VP.Info, Idx);
 
       setProvenance(&EE, ProvenanceScalar(Id, Tag, Info));
     }
@@ -1658,9 +1304,9 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
       ProvenanceScalar SP = assertProvenanceScalar(S);
 
       Value *Idx = IE.getOperand(2);
-      IRB.CreateInsertElement(VP.IdVector, SP.Id, Idx);
-      IRB.CreateInsertElement(VP.TagVector, SP.Tag, Idx);
-      IRB.CreateInsertElement(VP.InfoVector, SP.Info, Idx);
+      IRB.CreateInsertElement(VP.Id, SP.Id, Idx);
+      IRB.CreateInsertElement(VP.Tag, SP.Tag, Idx);
+      IRB.CreateInsertElement(VP.Info, SP.Info, Idx);
     }
   }
 
@@ -1680,18 +1326,14 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
 
       ArrayRef<int> Mask = SI.getShuffleMask();
 
-      Value *ShuffledIds =
-          IRB.CreateShuffleVector(VPL.IdVector, VPR.IdVector, Mask);
-      Value *ShuffledTags =
-          IRB.CreateShuffleVector(VPL.TagVector, VPR.TagVector, Mask);
-      Value *ShuffledInfo =
-          IRB.CreateShuffleVector(VPL.InfoVector, VPR.InfoVector, Mask);
+      Value *ShuffledIds = IRB.CreateShuffleVector(VPL.Id, VPR.Id, Mask);
+      Value *ShuffledTags = IRB.CreateShuffleVector(VPL.Tag, VPR.Tag, Mask);
+      Value *ShuffledInfo = IRB.CreateShuffleVector(VPL.Info, VPR.Info, Mask);
 
-      Value *Length = ConstantInt::get(BS.IntptrTy, Mask.size());
       ElementCount DestElems = ElementCount::get(Mask.size(), false);
 
       setProvenance(&SI, ProvenanceVector(ShuffledIds, ShuffledTags,
-                                          ShuffledInfo, Length, DestElems));
+                                          ShuffledInfo, DestElems));
     }
   }
 
@@ -1715,25 +1357,13 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
             assertProvenanceVector(IRB, {SI.getTrueValue(), Idx}, Comp.Elems);
         ProvenanceVector ProvR =
             assertProvenanceVector(IRB, {SI.getFalseValue(), Idx}, Comp.Elems);
-        Value *TagL, *TagR, *InfoL, *InfoR, *IDL, *IDR, *LenL, *LenR;
 
-        IDL = ProvL.IdVector;
-        TagL = ProvL.TagVector;
-        InfoL = ProvL.InfoVector;
-        LenL = ProvL.Length;
+        Value *Id = IRB.CreateSelect(SI.getCondition(), ProvL.Id, ProvR.Id);
+        Value *Tag = IRB.CreateSelect(SI.getCondition(), ProvL.Tag, ProvR.Tag);
+        Value *Info =
+            IRB.CreateSelect(SI.getCondition(), ProvL.Info, ProvR.Info);
 
-        IDR = ProvR.IdVector;
-        TagR = ProvR.TagVector;
-        InfoR = ProvR.InfoVector;
-        LenR = ProvR.Length;
-
-        Value *Id = IRB.CreateSelect(SI.getCondition(), IDL, IDR);
-        Value *Tag = IRB.CreateSelect(SI.getCondition(), TagL, TagR);
-        Value *Info = IRB.CreateSelect(SI.getCondition(), InfoL, InfoR);
-        Value *Len = IRB.CreateSelect(SI.getCondition(), LenL, LenR);
-
-        setProvenance({&SI, Idx},
-                      ProvenanceVector(Id, Tag, Info, Len, Comp.Elems));
+        setProvenance({&SI, Idx}, ProvenanceVector(Id, Tag, Info, Comp.Elems));
       } else {
         // For scalable provenance, we just select on each of the three
         // components.
@@ -1760,9 +1390,12 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
                          {AI, Root.Id, Root.Tag, Root.Info});
         }
       }
+      IRB.CreateCall(BS.BsanFuncPopAllocaFrame, {});
     }
-    IRB.CreateCall(BS.BsanFuncPopAllocaFrame, {});
-    IRB.CreateCall(BS.BsanFuncPopRetagFrame, {});
+
+    if (NumFnEntryRetags > 0) {
+      IRB.CreateCall(BS.BsanFuncPopRetagFrame, {});
+    }
   }
 
   void visitReturnInst(ReturnInst &I) {
@@ -1770,10 +1403,19 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     if (Value *RetVal = I.getReturnValue()) {
       SmallVector<ProvenanceComponent> *Components =
           getProvenanceComponents(IRB, RetVal->getType());
-      Value *RetvalArray = BS.RetvalTLS;
+
+      Value *RetvalByteWidth = BS.Zero;
       for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
-        const Provenance Prov = assertProvenance(IRB, Comp, {RetVal, Idx});
-        RetvalArray = storeProvenance(IRB, Prov, RetvalArray);
+        Value *Slot = offsetPointer(IRB, BS.DL, BS.RetvalTLS, RetvalByteWidth);
+
+        Provenance Prov = assertProvenance(IRB, Comp, {RetVal, Idx});
+        ProvenancePointer Dest =
+            ProvenancePointer(IRB, BS.PL, Slot, Comp.Elems, Prov.Kind);
+        Prov.store(IRB, BS.PL, Dest);
+
+        Value *ByteWidth =
+            IRB.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
+        RetvalByteWidth = IRB.CreateAdd(RetvalByteWidth, ByteWidth);
       }
     }
     popFrame(IRB, I);
@@ -1784,10 +1426,19 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     if (Value *RetVal = I.getValue()) {
       SmallVector<ProvenanceComponent> *Components =
           getProvenanceComponents(IRB, RetVal->getType());
-      Value *RetvalArray = BS.RetvalTLS;
+
+      Value *RetvalByteWidth = BS.Zero;
       for (const auto &[Idx, Comp] : llvm::enumerate(*Components)) {
-        const Provenance Prov = assertProvenance(IRB, Comp, {RetVal, Idx});
-        RetvalArray = storeProvenance(IRB, Prov, RetvalArray);
+        Value *Slot = offsetPointer(IRB, BS.DL, BS.RetvalTLS, RetvalByteWidth);
+
+        Provenance Prov = assertProvenance(IRB, Comp, {RetVal, Idx});
+        ProvenancePointer Dest =
+            ProvenancePointer(IRB, BS.PL, Slot, Comp.Elems, Prov.Kind);
+        Prov.store(IRB, BS.PL, Dest);
+
+        Value *ByteWidth =
+            IRB.CreateMul(Comp.NumProvenanceValues, BS.ProvenanceSize);
+        RetvalByteWidth = IRB.CreateAdd(RetvalByteWidth, ByteWidth);
       }
     }
     popFrame(IRB, I);
@@ -1809,34 +1460,6 @@ struct BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
     return IRBuilder<>(NextInst);
   }
 };
-} // end anonymous namespace
-
-PreservedAnalyses BorrowSanitizerPass::run(Module &M,
-                                           ModuleAnalysisManager &MAM) {
-  BorrowSanitizer ModuleSanitizer(M);
-
-  bool Modified = false;
-
-  auto &FAM = MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
-
-  const StackSafetyGlobalInfo *const SSGI =
-      ClUseStackSafety ? &MAM.getResult<StackSafetyGlobalAnalysis>(M) : nullptr;
-
-  for (Function &F : M) {
-    Modified |= ModuleSanitizer.instrumentFunction(F, FAM, SSGI);
-  }
-  if (!Modified)
-    return PreservedAnalyses::all();
-
-  Modified |= ModuleSanitizer.instrumentModule(M);
-
-  PreservedAnalyses PA = PreservedAnalyses::none();
-  // GlobalsAA is considered stateless and does not get invalidated unless
-  // explicitly invalidated; PreservedAnalyses::none() is not enough. Sanitizers
-  // make changes that require GlobalsAA to be invalidated.
-  PA.abandon<GlobalsAA>();
-  return PA;
-}
 
 Instruction *BorrowSanitizer::createBsanModuleDtor(Module &M) {
   IRBuilder<> IRB(M.getContext());
@@ -1876,7 +1499,7 @@ bool BorrowSanitizer::instrumentModule(Module &M) {
   // Put the constructor and destructor in comdat if both
   // (1) global instrumentation is not TU-specific
   // (2) target is ELF.
-  if (UseCtorComdat && TargetTriple.isOSBinFormatELF() && CtorComdat) {
+  if (CtorComdat && TargetTriple.isOSBinFormatELF() && CtorComdat) {
     BsanCtorFunction->setComdat(M.getOrInsertComdat(kBsanModuleCtorName));
     appendToGlobalCtors(M, BsanCtorFunction, Priority, BsanCtorFunction);
 
@@ -2036,9 +1659,8 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
   BorTagCounter = getOrInsertGlobal(M, kBsanBorTagCounterName, IntptrTy);
 }
 
-bool BorrowSanitizer::instrumentFunction(
-    Function &F, FunctionAnalysisManager &FAM,
-    const StackSafetyGlobalInfo *const SSGI) {
+bool BorrowSanitizer::instrumentFunction(Function &F,
+                                         FunctionAnalysisManager &FAM) {
   if (F.empty()) {
     return false;
   }
@@ -2059,26 +1681,6 @@ bool BorrowSanitizer::instrumentFunction(
   DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
 
   initializeCallbacks(*F.getParent(), TLI);
-  BorrowSanitizerVisitor Visitor(F, *this, SSGI, TLI, DT);
+  BorrowSanitizerVisitor Visitor(F, *this, TLI, DT);
   return Visitor.run();
-}
-
-static llvm::PassPluginLibraryInfo getBorrowSanitizerPluginInfo() {
-  return {LLVM_PLUGIN_API_VERSION, "BorrowSanitizer", LLVM_VERSION_STRING,
-          [](PassBuilder &PB) {
-            PB.registerPipelineParsingCallback(
-                [](StringRef Name, ModulePassManager &MPM,
-                   ArrayRef<PassBuilder::PipelineElement>) {
-                  if (Name == "bsan") {
-                    MPM.addPass(BorrowSanitizerPass(BorrowSanitizerOptions()));
-                    return true;
-                  }
-                  return false;
-                });
-          }};
-}
-
-extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
-llvmGetPassPluginInfo() {
-  return getBorrowSanitizerPluginInfo();
 }
