@@ -32,18 +32,19 @@ Once inside the container, you can use our Cargo plugin to build and test crates
 ```
 cargo bsan test
 ```
-Our plugin supports most of the same subcommands as Miri. When it's used for the first time, it will perform a one-time setup step of building an instrumented sysroot. You can trigger this step manually using the `setup` subcommand.
+Our plugin supports most of the same subcommands as Miri. When it's used for the first time, it will perform a one-time setup step of building an instrumented sysroot. You can trigger this step manually using the `setup` subcommand. 
 
 ## Building from Source
 Every single command needed to build, test, and install BorrrowSanitizer can be accessed through `xb`, our build script. For first-time setup, run:
 ```
 xb setup
 ```
-If you only want to install BorrowSanitizer, then run:
+This will install a [custom Rust toolchain](https://github.com/BorrowSanitizer/rust) under the name `bsan`.
+Then, to install BorrowSanitizer, run:
 ```
 xb install
 ```
-This will install a [custom Rust toolchain](https://github.com/BorrowSanitizer/rust) under the name `bsan`. You can speed this up by building our [dev container](https://containers.dev/), which already has the `bsan` toolchain installed. We recommend using the container to avoid any environment-specific issues. 
+This will place our tool's binaries into Cargo's [home directory](https://doc.rust-lang.org/cargo/guide/cargo-home.html) (`$HOME/.cargo`). You will need to have `bsan` set as the active toolchain (e.g. `rustup default bsan`) for our tool to work. 
 
 You can build and test components of the project using the `build` and `test` subcommands. For example, running `xb build` will build everything, but you can also pass the name of a subdirectory to build just that component, like so:
 ```
@@ -55,9 +56,6 @@ After making a change, you should run all of our CI steps locally using:
 ```
 xb ci
 ```
-
-This will place our binaries into Cargo's [home directory](https://doc.rust-lang.org/cargo/guide/cargo-home.html) (`$HOME/.cargo`). You will need to have `bsan` set as the active toolchain (e.g. `rustup default bsan`) for our tool to work. 
-
 ---
 BorrowSanitizer is dual-licensed under [Apache](https://github.com/BorrowSanitizer/bsan/blob/main/LICENSE-APACHE) and [MIT](https://github.com/BorrowSanitizer/bsan/blob/main/LICENSE-MIT), following the Rust project.
 
