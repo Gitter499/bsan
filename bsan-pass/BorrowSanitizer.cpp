@@ -193,9 +193,6 @@ public:
       CB->eraseFromParent();
     }
 
-    if (F.getName().contains("sanitize_standard_fds")) {
-      F.print(llvm::outs());
-    }
     return true;
   }
 
