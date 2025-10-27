@@ -3,7 +3,7 @@
 #![feature(io_error_more)]
 
 use anyhow::Result;
-use clap::{command, Parser};
+use clap::{Parser};
 use commands::Component;
 
 use crate::utils::BenchTool;
@@ -122,7 +122,7 @@ pub enum Command {
         #[arg(default_value_t = 5)]
         warmups: i32,
         /// Tools to run differential benchmarks on
-        #[arg(value_enum, default_values_t = vec![BenchTool::MIRI, BenchTool::NATIVE])]
+        #[arg(value_enum, default_values_t = vec![BenchTool::BSAN, BenchTool::NATIVE, BenchTool::MIRI, BenchTool::ASAN])]
         tools: Vec<BenchTool>,
         /// Flags for Miri config
         #[arg(allow_hyphen_values(true), last(true))]

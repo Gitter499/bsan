@@ -14,6 +14,7 @@ use xz2::bufread::XzDecoder;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, ValueEnum, EnumIter)]
 pub enum BenchTool {
+    BSAN,
     NATIVE,
     MIRI,
     ASAN,

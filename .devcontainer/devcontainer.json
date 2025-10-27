@@ -3,9 +3,9 @@
 	"build": {
 		"dockerfile": "Dockerfile",
 		"target": "image-dev",
-		"context": ".."
-	},
-	// Mount SSH folder
+		        "context": ".."
+			},
+			"postCreateCommand": "apt-get update && apt-get install -y libasan8",
 	"mounts": [
 		"source=${localEnv:HOME}/.ssh,target=/root/.ssh,readonly,type=bind"
 	],

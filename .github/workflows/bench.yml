@@ -41,7 +41,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: 'bench-results-${{ matrix.config.target }}'
-          path: tests/benches/results
+          path: bsan-script/benches/results
 
   process-and-deploy:
     needs: build

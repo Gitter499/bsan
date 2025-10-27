@@ -21,9 +21,10 @@ const createChart = (architecture, benchmark_with_suffix, chartType) => {
   const benchmark = benchmark_with_suffix.replace("-results", "");
 
   const tool_map = {
-    [`./target/release/${benchmark}`]: "native",
+    [`../../target/release/${benchmark}`]: "native",
     [`./${benchmark}`]: "BorrowSanitizer",
-    [`cargo +nightly miri run -p programs --bin ${benchmark}`]: "Miri",
+    [`cargo miri run -p programs --bin ${benchmark}`]: "Miri",
+    [`../../target/debug/asan-${benchmark}`]: "ASAN",
   };
 
   const calculate_tool_transform = {
@@ -32,7 +33,7 @@ const createChart = (architecture, benchmark_with_suffix, chartType) => {
   };
 
   const baseSpec = {
-    "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+    "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
     "width": 600,
     "height": 400,
     "data": {
