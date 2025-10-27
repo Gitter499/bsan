@@ -136,7 +136,7 @@ impl Command {
             .run()
             .context("Failed to install hyperfine")?;
 
-        let bench_path = path!(env.root_dir / "tests" / "benches");
+        let bench_path = path!(env.root_dir / "bsan-script" / "benches");
 
         if !env.sh.path_exists(&bench_path) {
             return Err(anyhow!("Corrupted work tree! benches submodule missing!"));
@@ -215,14 +215,14 @@ impl Command {
 
             if tools.contains(&BenchTool::NATIVE) {
                 // Build base program with cargo
-                cmd!(env.sh, "cargo build -p programs")
+                cmd!(env.sh, "cargo build -p programs --release")
                     .arg("--bin")
                     .arg(program_name)
                     .quiet()
                     .run()
                     .context("Failed to build uninstrumented program with cargo")?;
 
-                commands.push(format!(" ../../target/debug/{program_name}"));
+                commands.push(format!("../../target/release/{program_name}"));
             }
 
             if tools.contains(&BenchTool::ASAN) {
