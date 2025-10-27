@@ -1,4 +1,5 @@
-let showMiri = false;
+let showOutlier = true; // Show outlier by default
+let outlierToolName = null;
 
 const createChart = (architecture, benchmark_with_suffix, chartType) => {
   const chartsDiv = document.getElementById("charts");
@@ -20,15 +21,19 @@ const createChart = (architecture, benchmark_with_suffix, chartType) => {
 
   const benchmark = benchmark_with_suffix.replace("-results", "");
 
-  const tool_map = {
-    [`../../target/release/${benchmark}`]: "native",
-    [`./${benchmark}`]: "BorrowSanitizer",
-    [`cargo miri run -p programs --bin ${benchmark}`]: "Miri",
-    [`../../target/debug/asan-${benchmark}`]: "ASAN",
-  };
+  // Find outlier
+  let maxMedian = 0;
+  let outlierCommand = null;
+  for (const result of data.results) {
+      if (result.median > maxMedian) {
+          maxMedian = result.median;
+          outlierCommand = result.command;
+      }
+  }
+  outlierToolName = outlierCommand;
 
   const calculate_tool_transform = {
-    "calculate": JSON.stringify(tool_map) + "[datum.command]",
+    "calculate": "datum.command",
     "as": "Tool"
   };
 
@@ -42,7 +47,7 @@ const createChart = (architecture, benchmark_with_suffix, chartType) => {
     "transform": [
       {"flatten": ["times"]},
       calculate_tool_transform,
-      {"filter": showMiri ? "datum.Tool !== null" : "datum.Tool !== 'Miri'"}
+      {"filter": showOutlier ? "datum.Tool !== null" : `datum.Tool !== '${outlierToolName}'`}
     ]
   };
 
@@ -74,8 +79,8 @@ const createChart = (architecture, benchmark_with_suffix, chartType) => {
         "field": "times",
         "type": "quantitative",
         "title": "Execution Time (s)",
-        "scale": {"type": "log"},
-        "axis": {"format": ".4f"}
+        "scale": {"type": "linear"},
+        "axis": {"format": ".4f", "tickCount": 10}
       },
       "color": {
         "field": "Tool",
@@ -141,7 +146,7 @@ const createChart = (architecture, benchmark_with_suffix, chartType) => {
         "type": "quantitative",
         "title": "Execution Time (s)",
         "scale": {"type": "linear"},
-        "axis": {"format": ".4f"}
+        "axis": {"format": ".4f", "tickCount": 10}
       }
     }
   };
@@ -177,7 +182,7 @@ const createChart = (architecture, benchmark_with_suffix, chartType) => {
             "type": "quantitative",
             "title": "Execution Time (s)",
             "scale": {"zero": false},
-            "axis": {"format": ".4f"}
+            "axis": {"format": ".4f", "tickCount": 10}
           },
           "color": {
             "field": "Tool",
@@ -206,7 +211,8 @@ const createChart = (architecture, benchmark_with_suffix, chartType) => {
     ]
   };
 
-  if (showMiri) {
+  if (showOutlier) {
+    boxPlotSpec.encoding.y.scale.type = "log"; // CHANGED: Apply log scale to boxPlotSpec
     timeSeriesSpec.layer[0].encoding.y.scale.type = "log";
     scatterPlotSpec.encoding.y.scale.type = "log";
   }
@@ -225,15 +231,17 @@ const createChart = (architecture, benchmark_with_suffix, chartType) => {
   }
 
   const chartContainer = document.createElement("div");
+  chartContainer.className = "chart-container"; // ADDED: Add class for styling
   chartsDiv.appendChild(chartContainer);
   vegaEmbed(chartContainer, spec);
 };
 
 const main = () => {
+  console.log("window.benchmarkData:", window.benchmarkData);
   const archSelect = document.getElementById("arch-select");
   const benchmarkSelect = document.getElementById("benchmark-select");
   const chartTypeSelect = document.getElementById("chart-type-select");
-  const miriToggle = document.getElementById("miri-toggle");
+  const outlierToggle = document.getElementById("outlier-toggle");
 
   const populateBenchmarks = (architecture) => {
     benchmarkSelect.innerHTML = "";
@@ -251,10 +259,15 @@ const main = () => {
     const selectedBenchmark = benchmarkSelect.value;
     const selectedChartType = chartTypeSelect.value;
     createChart(selectedArch, selectedBenchmark, selectedChartType);
+    updateOutlierButton();
   };
 
-  const updateMiriButton = () => {
-    miriToggle.textContent = showMiri ? "Miri: On" : "Miri: Off";
+  const updateOutlierButton = () => {
+    if (outlierToolName) {
+        outlierToggle.textContent = showOutlier ? `Hide ${outlierToolName} (Outlier)` : `Show ${outlierToolName} (Outlier)`;
+    } else {
+        outlierToggle.textContent = "Toggle Outlier";
+    }
   };
 
   archSelect.addEventListener("change", () => {
@@ -265,9 +278,8 @@ const main = () => {
   benchmarkSelect.addEventListener("change", updateChart);
   chartTypeSelect.addEventListener("change", updateChart);
 
-  miriToggle.addEventListener("click", () => {
-    showMiri = !showMiri;
-    updateMiriButton();
+  outlierToggle.addEventListener("click", () => {
+    showOutlier = !showOutlier;
     updateChart();
   });
 
@@ -275,7 +287,6 @@ const main = () => {
   if (window.benchmarkData) {
     const initialArch = archSelect.value;
     populateBenchmarks(initialArch);
-    updateMiriButton();
     updateChart();
   } else {
     document.getElementById("charts").innerHTML = "<p>Benchmark data not loaded. Please ensure data.js is present.</p>";

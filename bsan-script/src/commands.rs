@@ -401,11 +401,19 @@ impl Command {
 
             
 
-                        for (label, command) in command_labels.iter().zip(commands.iter()) {
+                                                for label in &command_labels {
 
-                            hyperfine_cmd = hyperfine_cmd.arg("--command-name").arg(label).arg(command);
+            
 
-                        }
+                                                    hyperfine_cmd = hyperfine_cmd.arg("--command-name").arg(label);
+
+            
+
+                                                }
+
+            
+
+                                                hyperfine_cmd = hyperfine_cmd.args(&commands);
 
             
 
