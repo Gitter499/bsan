@@ -1,7 +1,7 @@
 name: Bench
 on:
   push:
-    branches: [ "main", "gitter499/in-progress-bench"]
+    branches: [ "main", "gitter499/in-progress-bench", "gitter499/results"]
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:

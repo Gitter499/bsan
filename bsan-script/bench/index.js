@@ -80,7 +80,8 @@ const createChart = (architecture, benchmark_with_suffix, chartType) => {
         "type": "quantitative",
         "title": "Execution Time (s)",
         "scale": {"type": "linear"},
-        "axis": {"format": ".4f", "tickCount": 10}
+        "axis": {"format": ".4f", "tickCount": 50},
+        "scale": {"nice": true, "padding": 10}
       },
       "color": {
         "field": "Tool",
@@ -236,61 +237,73 @@ const createChart = (architecture, benchmark_with_suffix, chartType) => {
   vegaEmbed(chartContainer, spec);
 };
 
-const main = () => {
-  console.log("window.benchmarkData:", window.benchmarkData);
-  const archSelect = document.getElementById("arch-select");
-  const benchmarkSelect = document.getElementById("benchmark-select");
-  const chartTypeSelect = document.getElementById("chart-type-select");
-  const outlierToggle = document.getElementById("outlier-toggle");
+  const main = () => {
+    console.log("window.benchmarkData:", window.benchmarkData);
+    const archSelect = document.getElementById("arch-select");
+    const benchmarkSelect = document.getElementById("benchmark-select");
+    const chartTypeSelect = document.getElementById("chart-type-select");
+    const outlierToggle = document.getElementById("outlier-toggle");
 
-  const populateBenchmarks = (architecture) => {
-    benchmarkSelect.innerHTML = "";
-    const benchmarks = Object.keys(window.benchmarkData[architecture] || {});
-    for (const benchmark of benchmarks) {
-      const option = document.createElement("option");
-      option.value = benchmark;
-      option.textContent = benchmark;
-      benchmarkSelect.appendChild(option);
-    }
-  };
+    const populateArchitectures = () => {
+      archSelect.innerHTML = ""; // Clear existing options
+      const architectures = Object.keys(window.benchmarkData || {});
+      for (const arch of architectures) {
+        const option = document.createElement("option");
+        option.value = arch;
+        option.textContent = arch;
+        archSelect.appendChild(option);
+      }
+    };
 
-  const updateChart = () => {
-    const selectedArch = archSelect.value;
-    const selectedBenchmark = benchmarkSelect.value;
-    const selectedChartType = chartTypeSelect.value;
-    createChart(selectedArch, selectedBenchmark, selectedChartType);
-    updateOutlierButton();
-  };
+    const populateBenchmarks = (architecture) => {
+      benchmarkSelect.innerHTML = "";
+      const benchmarks = Object.keys(window.benchmarkData[architecture] || {});
+      for (const benchmark of benchmarks) {
+        const option = document.createElement("option");
+        option.value = benchmark;
+        option.textContent = benchmark;
+        benchmarkSelect.appendChild(option);
+      }
+    };
 
-  const updateOutlierButton = () => {
-    if (outlierToolName) {
-        outlierToggle.textContent = showOutlier ? `Hide ${outlierToolName} (Outlier)` : `Show ${outlierToolName} (Outlier)`;
+    const updateChart = () => {
+      const selectedArch = archSelect.value;
+      const selectedBenchmark = benchmarkSelect.value;
+      const selectedChartType = chartTypeSelect.value;
+      createChart(selectedArch, selectedBenchmark, selectedChartType);
+      updateOutlierButton();
+    };
+
+    const updateOutlierButton = () => {
+      if (outlierToolName) {
+          outlierToggle.textContent = showOutlier ? `Hide ${outlierToolName} (Outlier)` : `Show ${outlierToolName} (Outlier)`;
+      } else {
+          outlierToggle.textContent = "Toggle Outlier";
+      }
+    };
+
+    archSelect.addEventListener("change", () => {
+      populateBenchmarks(archSelect.value);
+      updateChart();
+    });
+
+    benchmarkSelect.addEventListener("change", updateChart);
+    chartTypeSelect.addEventListener("change", updateChart);
+
+    outlierToggle.addEventListener("click", () => {
+      showOutlier = !showOutlier;
+      updateChart();
+    });
+
+    // Initial load
+    if (window.benchmarkData && Object.keys(window.benchmarkData).length > 0) {
+      populateArchitectures();
+      const initialArch = archSelect.value;
+      populateBenchmarks(initialArch);
+      updateChart();
     } else {
-        outlierToggle.textContent = "Toggle Outlier";
+      document.getElementById("charts").innerHTML = "<p>Benchmark data not loaded. Please ensure data.js is present and contains data.</p>";
     }
   };
 
-  archSelect.addEventListener("change", () => {
-    populateBenchmarks(archSelect.value);
-    updateChart();
-  });
-
-  benchmarkSelect.addEventListener("change", updateChart);
-  chartTypeSelect.addEventListener("change", updateChart);
-
-  outlierToggle.addEventListener("click", () => {
-    showOutlier = !showOutlier;
-    updateChart();
-  });
-
-  // Initial load
-  if (window.benchmarkData) {
-    const initialArch = archSelect.value;
-    populateBenchmarks(initialArch);
-    updateChart();
-  } else {
-    document.getElementById("charts").innerHTML = "<p>Benchmark data not loaded. Please ensure data.js is present.</p>";
-  }
-};
-
-main();
+  main();

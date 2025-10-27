@@ -1,27 +1,18 @@
 const fs = require('fs');
 const path = require('path');
 
-const ARTIFACTS_BASE_DIR = path.resolve(__dirname, '../benches/results');
+const ARTIFACTS_BASE_DIR = path.resolve(__dirname, '../../artifacts');
+const LOCAL_RESULTS_DIR = path.resolve(__dirname, '../benches/results');
 const OUTPUT_DIR = path.resolve(__dirname, './dist');
 const OUTPUT_FILE = path.join(OUTPUT_DIR, 'data.js');
 
 const benchmarkData = {};
-benchmarkData['local-run'] = {}; // Aggregate all local runs under a single 'local-run' architecture
 
-if (!fs.existsSync(ARTIFACTS_BASE_DIR)) {
-  console.error(`Artifacts base directory not found: ${ARTIFACTS_BASE_DIR}`);
-  process.exit(1);
-}
+const processRunDir = (runDirPath, architecture) => {
+  if (!benchmarkData[architecture]) {
+    benchmarkData[architecture] = {};
+  }
 
-// Read all subdirectories in ARTIFACTS_BASE_DIR (these are the timestamped run directories)
-const runDirs = fs.readdirSync(ARTIFACTS_BASE_DIR, { withFileTypes: true })
-  .filter(dirent => dirent.isDirectory())
-  .map(dirent => dirent.name);
-
-for (const runDirName of runDirs) {
-  const runDirPath = path.join(ARTIFACTS_BASE_DIR, runDirName);
-
-  // Read all JSON files in the current run directory
   const benchmarkFiles = fs.readdirSync(runDirPath, { withFileTypes: true })
     .filter(dirent => dirent.isFile() && dirent.name.endsWith('.json'))
     .map(dirent => dirent.name);
@@ -33,17 +24,48 @@ for (const runDirName of runDirs) {
     try {
       const fileContent = fs.readFileSync(benchmarkFilePath, 'utf8');
       if (fileContent.trim() === '') {
-        console.warn(`Skipping empty file: ${runDirName}/${benchmarkFileName}`);
+        console.warn(`Skipping empty file: ${runDirPath}/${benchmarkFileName}`);
         continue;
       }
-      // For local runs, we'll just take the latest result for each benchmark
-      // This assumes that the latest run directory is the one we care about
-      // A more sophisticated approach would be to allow selecting different runs
-      benchmarkData['local-run'][benchmarkName] = JSON.parse(fileContent);
-      console.log(`Successfully processed ${runDirName}/${benchmarkFileName}`);
+      benchmarkData[architecture][benchmarkName] = JSON.parse(fileContent);
+      console.log(`Successfully processed ${runDirPath}/${benchmarkFileName}`);
     } catch (error) {
-      console.error(`Error processing ${runDirName}/${benchmarkFileName}:`, error);
+      console.error(`Error processing ${runDirPath}/${benchmarkFileName}:`, error);
     }
+  }
+};
+
+// Process CI artifacts if the directory exists
+if (fs.existsSync(ARTIFACTS_BASE_DIR)) {
+  const archDirs = fs.readdirSync(ARTIFACTS_BASE_DIR, { withFileTypes: true })
+    .filter(dirent => dirent.isDirectory())
+    .map(dirent => dirent.name);
+
+  for (const archDirName of archDirs) {
+    const archDirPath = path.join(ARTIFACTS_BASE_DIR, archDirName);
+    const architecture = archDirName.replace('bench-results-', '');
+
+    const runDirs = fs.readdirSync(archDirPath, { withFileTypes: true })
+      .filter(dirent => dirent.isDirectory())
+      .map(dirent => dirent.name);
+
+    for (const runDirName of runDirs) {
+      const runDirPath = path.join(archDirPath, runDirName);
+      processRunDir(runDirPath, architecture);
+    }
+  }
+}
+
+// Process local results if the directory exists
+if (fs.existsSync(LOCAL_RESULTS_DIR)) {
+  benchmarkData['local-run'] = {};
+  const runDirs = fs.readdirSync(LOCAL_RESULTS_DIR, { withFileTypes: true })
+    .filter(dirent => dirent.isDirectory())
+    .map(dirent => dirent.name);
+
+  for (const runDirName of runDirs) {
+    const runDirPath = path.join(LOCAL_RESULTS_DIR, runDirName);
+    processRunDir(runDirPath, 'local-run');
   }
 }
 
