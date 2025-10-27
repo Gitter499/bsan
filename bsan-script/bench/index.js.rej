@@ -1,0 +1,89 @@
+diff a/bsan-script/bench/index.js b/bsan-script/bench/index.js	(rejected hunks)
+@@ -1,11 +1,5 @@
+ let showMiri = false;
+ 
+-const tool_map = (benchmark) => ({
+-    [`./target/release/${benchmark}`]: "native",
+-    [`./${benchmark}`]: "BorrowSanitizer",
+-    [`cargo +nightly miri run -p programs --bin ${benchmark}`]: "Miri",
+-});
+-
+ const createChart = (architecture, benchmark_with_suffix, chartType) => {
+   const chartsDiv = document.getElementById("charts");
+   chartsDiv.innerHTML = ""; // Clear previous charts
+@@ -250,7 +250,6 @@ const main = () => {
+     const selectedBenchmark = benchmarkSelect.value;
+     const selectedChartType = chartTypeSelect.value;
+     createChart(selectedArch, selectedBenchmark, selectedChartType);
+-    createDiffTable(selectedArch);
+   };
+ 
+   const updateMiriButton = () => {
+@@ -282,64 +281,4 @@ const main = () => {
+   }
+ };
+ 
+-main();
+-
+-const createDiffTable = (architecture) => {
+-  const diffTableDiv = document.getElementById("diff-table");
+-  diffTableDiv.innerHTML = ""; // Clear previous table
+-
+-  const archData = window.benchmarkData[architecture];
+-  if (!archData) {
+-    diffTableDiv.innerHTML = `<p>No data found for architecture: ${architecture}</p>`;
+-    return;
+-  }
+-
+-  let tableHtml = `
+-    <h2>Performance Difference</h2>
+-    <table border="1" style="width:100%; text-align:center;">
+-      <tr>
+-        <th>Benchmark</th>
+-        <th>Native (mean)</th>
+-        <th>BorrowSanitizer (mean)</th>
+-        <th>Miri (mean)</th>
+-        <th>BSAN vs Native (%)</th>
+-        <th>Miri vs Native (%)</th>
+-      </tr>
+-  `;
+-
+-  for (const benchmark_with_suffix in archData) {
+-    const benchmark = benchmark_with_suffix.replace("-results", "");
+-    const data = archData[benchmark_with_suffix];
+-    const results = {};
+-
+-    const current_tool_map = tool_map(benchmark);
+-
+-    for (const result of data.results) {
+-      const tool = current_tool_map[result.command];
+-      if (tool) {
+-        results[tool] = result.mean;
+-      }
+-    }
+-
+-    const nativeTime = results["native"];
+-    const bsanTime = results["BorrowSanitizer"];
+-    const miriTime = results["Miri"];
+-
+-    const bsanDiff = nativeTime && bsanTime ? ((bsanTime - nativeTime) / nativeTime) * 100 : "N/A";
+-    const miriDiff = nativeTime && miriTime ? ((miriTime - nativeTime) / nativeTime) * 100 : "N/A";
+-
+-    tableHtml += `
+-      <tr>
+-        <td>${benchmark}</td>
+-        <td>${nativeTime ? nativeTime.toFixed(4) : "N/A"}</td>
+-        <td>${bsanTime ? bsanTime.toFixed(4) : "N/A"}</td>
+-        <td>${miriTime ? miriTime.toFixed(4) : "N/A"}</td>
+-        <td>${bsanDiff !== "N/A" ? bsanDiff.toFixed(2) + "%" : "N/A"}</td>
+-        <td>${miriDiff !== "N/A" ? miriDiff.toFixed(2) + "%" : "N/A"}</td>
+-      </tr>
+-    `;
+-  }
+-
+-  tableHtml += `</table>`;
+-  diffTableDiv.innerHTML = tableHtml;
+-};
+\ No newline at end of file
++main();
+\ No newline at end of file

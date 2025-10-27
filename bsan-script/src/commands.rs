@@ -2,14 +2,14 @@ use std::fs;
 use std::ops::Deref;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
+use chrono::Local;
 use clap::ValueEnum;
-use cmake::Config;
 use path_macro::path;
 use xshell::cmd;
 
 use crate::env::{BsanEnv, Mode};
-use crate::utils::install_git_hooks;
+use crate::utils::{install_git_hooks, BenchTool};
 use crate::Command;
 
 impl Command {
@@ -26,7 +26,7 @@ impl Command {
             }),
             Command::Bin { binary_name, args } => Self::bin(env, binary_name, &args),
             Command::Opt { args } => Self::opt(env, &args),
-            Command::Fmt { check } => Self::fmt(env, check),
+            Command::Fmt { args } => Self::fmt(env, &args),
             Command::Build { components, args } => components.iter().try_for_each(|c| {
                 c.build(env, &args)?;
                 Ok(())
@@ -49,7 +49,10 @@ impl Command {
                 c.miri(env, &args)?;
                 Ok(())
             }),
-            Command::Inst { file, debug, args } => Self::inst(env, file, debug, &args),
+            Command::Bench { runs, warmups, miri_flags, tools } => {
+                Self::bench(env, runs, warmups, tools, miri_flags)
+            }
+            Command::Inst { file, args } => Self::inst(env, file, &args),
         }
     }
 
@@ -63,9 +66,8 @@ impl Command {
         Ok(())
     }
 
-    fn fmt(env: &mut BsanEnv, check: bool) -> Result<()> {
-        env.fmt(check)?;
-        BsanPass::fmt(env, check)
+    fn fmt(env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.fmt(args)
     }
 
     fn ui(env: &mut BsanEnv, _bless: bool) -> Result<()> {
@@ -78,13 +80,11 @@ impl Command {
 
             env.sh.set_var("BSAN_PLUGIN", plugin);
             env.sh.set_var("BSAN_DRIVER", driver);
-            env.sh.set_var("BSAN_RT", runtime);
+            env.sh.set_var("BSAN_RT_DIR", runtime.parent().unwrap());
             env.sh.set_var("BSAN_SYSROOT", path!(&env.build_dir / "sysroot"));
 
             cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
             cmd!(env.sh, "cargo test -p bsan --test ui").run()?;
-            cmd!(env.sh, "python3 tests/test-cargo-bsan/run_test.py").run()?;
-
             Ok(())
         })
     }
@@ -93,10 +93,10 @@ impl Command {
         let components = crate::all_components!();
         // We want to ensure that all formatting steps are completed for every component
         // before we try running more expensive checks, like unit and integration tests.
-        Self::fmt(env, true)?;
+        Self::fmt(env, &["--check".to_string()])?;
         components.iter().try_for_each(|c| c.clippy(env, args))?;
         components.iter().try_for_each(|c| c.test(env, args))?;
-        //components.iter().try_for_each(|c| c.miri(env, args))?;
+        components.iter().try_for_each(|c| c.miri(env, args))?;
         Self::ui(env, false)
     }
 
@@ -119,15 +119,157 @@ impl Command {
         Ok(())
     }
 
-    fn inst(env: &mut BsanEnv, file: String, debug: bool, args: &[String]) -> Result<()> {
+    fn bench(
+        env: &mut BsanEnv,
+        runs: i32,
+        warmups: i32,
+        tools: Vec<BenchTool>,
+        // Unfortunately cannot move this to be a part of BenchTool because
+        // of limitations with Clap's ValueEnum
+        miri_flags: Vec<String>,
+    ) -> Result<()> {
+        println!("Benchmarking...");
+
+        // Ensure hyperfine is installed
+        cmd!(env.sh, "cargo install hyperfine --locked")
+            .quiet()
+            .run()
+            .context("Failed to install hyperfine")?;
+
+        let bench_path = path!(env.root_dir / "tests" / "benches");
+
+        if !env.sh.path_exists(&bench_path) {
+            return Err(anyhow!("Corrupted work tree! benches submodule missing!"));
+        }
+
+        // Pull the latest benches changes
+        env.sh.change_dir(&bench_path);
+        // TODO: Uncomment this when the benches repo is public, for now it's easier to do it manually
+        // cmd!(env.sh, "git pull").quiet().run().context("Failed to pull benches repo!")?;
+
+        let target_dir = path!(&bench_path / "programs" / "src" / "bin");
+        // While probably not the best unique global ID, it is *extremely* unlikely that two benches are triggered at the same
+        // exact time (famous last words)
+        let time = Local::now().format("%Y-%m-%d_%H-%M-%S");
+        env.sh
+            .create_dir(path!(&bench_path / "results" / format!("results_{}", &time)))
+            .context("Failed to create results directory!")?;
+
+        // Most baseline version of Miri with eveything except TB aliasing disabled
+        let default_miri_flags: Vec<String> = vec![
+            "-Zmiri-tree-borrows",
+            "-Zmiri-ignore-leaks",
+            "-Zmiri-disable-alignment-check",
+            "-Zmiri-disable-data-race-detector",
+            "-Zmiri-disable-validation",
+            "-Zmiri-disable-weak-memory-emulation",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        let flags = if miri_flags.is_empty() { default_miri_flags } else { miri_flags };
+
+        for file_path in env
+            .sh
+            .read_dir(target_dir)
+            .context("Corrupt benches submodule! Failed to read over target programs")?
+        {
+            let file = file_path.file_name().unwrap();
+            let program_name = file.to_str().unwrap().strip_suffix(".rs").unwrap();
+
+            println!(
+                r#"
+                
+                    ==============================
+                    Benchmarking: {program_name}
+
+                    Run Spec:
+                        Differentially testing against: {tools:#?}
+                        Runs: {runs}
+                        Warmup per experiment: {warmups}
+                    ==============================
+                "#
+            );
+
+            // Instrument program with BSAN
+            Self::inst(env, file_path.to_str().unwrap().to_string(), Default::default())
+                .with_context(|| {
+                    format!("Failed to instrument {program_name} at {file_path:#?}")
+                })?;
+
+            let mut commands: Vec<String> = Vec::new();
+
+            if tools.contains(&BenchTool::MIRI) {
+                env.sh.set_var("MIRIFLAGS", &flags.join(" "));
+                // TODO: Possible variable for changing miri's toolchain
+                // let miri_toolchain = ""
+
+                cmd!(env.sh, "cargo miri setup")
+                    .quiet()
+                    .run()
+                    .context("Failed to setup Miri")?;
+
+                commands.push(format!("cargo miri run -p programs --bin {program_name}"));
+            }
+
+            if tools.contains(&BenchTool::NATIVE) {
+                // Build base program with cargo
+                cmd!(env.sh, "cargo build -p programs")
+                    .arg("--bin")
+                    .arg(program_name)
+                    .quiet()
+                    .run()
+                    .context("Failed to build uninstrumented program with cargo")?;
+
+                commands.push(format!(" ../../target/debug/{program_name}"));
+            }
+
+            if tools.contains(&BenchTool::ASAN) {
+                env.sh.set_var("RUSTFLAGS", "-Zsanitizer-address");
+
+                // TODO: Disable more flags, pass these in the RunSpec
+                env.sh.set_var(
+                    "ASAN_OPTIONS",
+                    vec!["detect_leaks=false", "detect_deadlocks=false", "halt_on_error=false"]
+                        .join(":"),
+                );
+
+                cmd!(env.sh, "cargo build -Zbuild-std -p programs")
+                    .quiet()
+                    .arg("--bin")
+                    .arg(format!("asan-{program_name}"))
+                    .run()
+                    .context("Failed to build ASAN program")?;
+
+                commands.push(format!(" ../../target/debug/asan-{program_name}"));
+            }
+
+            // Push BSAN command
+            commands.push(format!(" ./{program_name}"));
+
+            // Run hyperfine with no default shell and ignorning non-zero exit codes by default
+            // TODO: Add these to the runspec
+            cmd!(env.sh, "hyperfine -i -N")
+                .arg("--warmup")
+                .arg(warmups.to_string())
+                .arg("--runs")
+                .arg(runs.to_string())
+                .arg("--export-json")
+                .arg(format!("./results/results_{time}/{program_name}-results.json"))
+                // .arg("--cleanup")
+                // .arg(format!("rm ./{program_name}"))
+                .args(commands)
+                .run()
+                .context("Failed to run benchmark with hyperfine")?;
+        }
+
+        Ok(())
+    }
+
+    fn inst(env: &mut BsanEnv, file: String, args: &[String]) -> Result<()> {
         let plugin = env.build_artifact(BsanPass, &[])?;
-
-        let runtime = if debug {
-            env.build_artifact(BsanRt, &["--features".to_string(), "debug".to_string()])?
-        } else {
-            env.build_artifact(BsanRt, &[])?
-        };
-
+        let runtime = env.build_artifact(BsanRt, &[])?;
         let driver = env.build_artifact(BsanDriver, &[])?;
         let cargo_bsan = env.build_artifact(CargoBsan, &[])?;
 
@@ -135,7 +277,7 @@ impl Command {
 
         env.sh.set_var("BSAN_PLUGIN", plugin);
         env.sh.set_var("BSAN_DRIVER", &driver);
-        env.sh.set_var("BSAN_RT", runtime);
+        env.sh.set_var("BSAN_RT_DIR", runtime.parent().unwrap());
         env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
 
         cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
@@ -265,13 +407,8 @@ impl_component!(BsanDriver, "bsan-driver", true, false);
 impl_component!(CargoBsan, "cargo-bsan", true, false);
 impl_component!(BsanShared, "bsan-shared", false, true);
 
-static RT_FLAGS: &[&str] = &[
-    "-Cpanic=abort",
-    "-Zpanic_abort_tests",
-    "-Cembed-bitcode=yes",
-    "-Clto",
-    "-Cforce-frame-pointers=yes",
-];
+static RT_FLAGS: &[&str] =
+    &["-Cpanic=abort", "-Zpanic_abort_tests", "-Cembed-bitcode=yes", "-Clto"];
 
 struct BsanRt;
 
@@ -323,29 +460,6 @@ impl Buildable for BsanRt {
 
 struct BsanPass;
 
-impl BsanPass {
-    fn cmake(env: &mut BsanEnv) -> Result<Config> {
-        let source_dir = path!(env.root_dir / "bsan-pass");
-        let mut cfg = env.cmake(source_dir);
-
-        let cxxflags = env.llvm_config().arg("--cxxflags").output()?.stdout;
-        let cxxflags: String = String::from_utf8(cxxflags)?;
-        cfg.define("CMAKE_CXX_FLAGS", cxxflags.trim());
-        Ok(cfg)
-    }
-
-    fn fmt(env: &mut BsanEnv, check: bool) -> Result<()> {
-        let mut cfg = BsanPass::cmake(env)?;
-        if check {
-            cfg.build_target("clang-format-check");
-        } else {
-            cfg.build_target("clang-format");
-        }
-        cfg.build();
-        Ok(())
-    }
-}
-
 impl Buildable for BsanPass {
     fn artifact(&self) -> &'static str {
         #[cfg(target_os = "macos")]
@@ -360,19 +474,25 @@ impl Buildable for BsanPass {
     }
 
     fn build(&self, env: &mut BsanEnv, _args: &[String]) -> Result<Option<PathBuf>> {
-        let mut cfg = BsanPass::cmake(env)?;
+        let source_dir = path!(env.root_dir / "bsan-pass");
+        let mut cfg = env.cmake(source_dir);
+
+        let cxxflags = env.llvm_config().arg("--cxxflags").output()?.stdout;
+        let cxxflags: String = String::from_utf8(cxxflags)?;
+
+        cfg.define("CMAKE_CXX_FLAGS", cxxflags.trim());
         cfg.build_target("bsan_plugin");
         cfg.pic(true);
         let path = cfg.build();
         Ok(Some(path!(path / "build" / self.artifact())))
     }
 
-    fn test(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
-        Ok(())
+    fn test(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.test("bsan-rt", args))
     }
 
-    fn clippy(&self, _env: &mut BsanEnv, _args: &[String]) -> Result<()> {
-        Ok(())
+    fn clippy(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {
+        env.with_flags("RUSTFLAGS", RT_FLAGS, |env| env.clippy("bsan-rt", args))
     }
 
     fn install(&self, env: &mut BsanEnv, args: &[String]) -> Result<()> {

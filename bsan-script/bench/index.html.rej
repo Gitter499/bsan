@@ -1,0 +1,13 @@
+diff a/bsan-script/bench/index.html b/bsan-script/bench/index.html	(rejected hunks)
+@@ -69,10 +69,9 @@
+       </div>
+     </div>
+     <div id="charts"></div>
+-    <div id="diff-table"></div>
+     <button id="miri-toggle">Toggle Miri</button>
+ 
+-    <script src="dist/data.js"></script>
++    <script src="../dist/data.js"></script>
+     <script type="text/javascript" src="index.js"></script>
+   </body>
+ </html>
