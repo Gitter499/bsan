@@ -49,9 +49,9 @@ impl Command {
                 c.miri(env, &args)?;
                 Ok(())
             }),
-            Command::Bench { runs, warmups, miri_flags, tools } => {
-                Self::bench(env, runs, warmups, tools, miri_flags)
-            }
+            Command::Bench { runs, warmups, miri_flags, tools } => env.in_mode(Mode::Release, |env| {
+                Self::bench(env, runs, warmups, tools.clone(), miri_flags.clone())
+            }),
             Command::Inst { file, args } => Self::inst(env, file, &args),
         }
     }
@@ -207,11 +207,19 @@ impl Command {
 
             
 
-                    let plugin = env.build_artifact(BsanPass, &[("--release").to_string()])?;
+                                        let plugin = env.build_artifact(BsanPass, &[])?;
 
-                    let runtime = env.build_artifact(BsanRt, &[("--release").to_string()])?;
+            
 
-                    let driver = env.build_artifact(BsanDriver, &[("--release").to_string()])?;
+                                        let runtime = env.build_artifact(BsanRt, &[])?;
+
+            
+
+                                        let driver = env.build_artifact(BsanDriver, &[])?;
+
+            
+
+                    
 
             
 
