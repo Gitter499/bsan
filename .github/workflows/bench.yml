@@ -63,10 +63,6 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install dependencies
-        working-directory: ./bsan-script/bench
-        run: npm install
-
       - name: Prepare data
         working-directory: ./bsan-script/bench
         run: node prepare-data.js
