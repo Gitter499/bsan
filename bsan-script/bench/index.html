@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Benchmark Results</title>
+  <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vega-lite@6"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
+  <style>
+    body { font-family: sans-serif; margin: 2em; }
+    h1 { text-align: center; }
+    .controls { display: flex; justify-content: center; align-items: center; gap: 1em; margin-bottom: 2em; }
+    #charts { display: flex; justify-content: center; }
+    .toggle-button { margin-top: 1em; display: block; margin-left: auto; margin-right: auto; }
+  </style>
+</head>
+<body>
+  <h1>Benchmark Results</h1>
+  <div class="controls">
+    <div>
+      <label for="arch-select">Architecture:</label>
+      <select id="arch-select">
+        <option value="aarch64-unknown-linux-gnu">aarch64-unknown-linux-gnu</option>
+        <option value="x86_64-unknown-linux-gnu">x86_64-unknown-linux-gnu</option>
+      </select>
+    </div>
+    <div>
+      <label for="benchmark-select">Benchmark:</label>
+      <select id="benchmark-select"></select>
+    </div>
+    <div>
+      <label for="chart-type-select">Chart Type:</label>
+      <select id="chart-type-select">
+        <option value="box">Box Plot</option>
+        <option value="scatter">Scatter Plot</option>
+        <option value="time">Time Series</option>
+      </select>
+    </div>
+  </div>
+  <div id="charts"></div>
+  <button id="miri-toggle" class="toggle-button">Toggle Miri</button>
+
+  <script src="dist/data.js"></script>
+  <script type="text/javascript" src="index.js"></script>
+</body>
+</html>
