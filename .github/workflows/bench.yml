@@ -70,7 +70,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./bsan-script
+          path: ./bsan-script/bench
 
   deploy:
     needs: process-and-deploy
