@@ -10,7 +10,10 @@
   <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
 </head>
 <body>
-  <h1>Benchmark Results</h1>
+  <div class="header-container">
+    <h1>Benchmark Results</h1>
+    <button id="theme-toggle">Toggle Theme</button>
+  </div>
   <div class="controls">
     <div>
       <label for="arch-select">Architecture:</label>
@@ -28,13 +31,57 @@
         <option value="time">Time Series</option>
       </select>
     </div>
+    <div id="tool-selector-container">
+      <label>Tools:</label>
+      <div id="tool-checkboxes"></div>
+    </div>
   </div>
   <div id="charts"></div>
-  <div class="button-container">
-    <button id="outlier-toggle" class="toggle-button">Toggle Outlier</button>
+
+  <div class="tabs">
+    <button class="tab-button active" data-tab="charts-panel">Charts</button>
+    <button class="tab-button" data-tab="agreement-panel">Agreement Table</button>
+    <button class="tab-button" data-tab="history-panel">History</button>
+  </div>
+
+  <div id="charts-panel" class="tab-content active">
+    <div id="charts-container"></div>
+  </div>
+
+  <div id="agreement-panel" class="tab-content">
+    <div class="section-container">
+      <h2>Agreement Table</h2>
+      <div id="agreement-table-container"></div>
+    </div>
+  </div>
+
+  <div id="history-panel" class="tab-content">
+    <div class="section-container">
+      <h2>Benchmark History</h2>
+      <div id="history-table-container"></div>
+    </div>
+  </div>
+
+  <!-- The Modal -->
+  <div id="output-modal" class="modal">
+    <div class="modal-content">
+      <span class="close-button">&times;</span>
+      <h3>Command Output</h3>
+      <div class="modal-header">
+        <h4>Stdout</h4>
+        <button id="copy-stdout" class="copy-button">Copy</button>
+      </div>
+      <pre id="modal-stdout"></pre>
+      <div class="modal-header">
+        <h4>Stderr</h4>
+        <button id="copy-stderr" class="copy-button">Copy</button>
+      </div>
+      <pre id="modal-stderr"></pre>
+    </div>
   </div>
 
   <script src="dist/data.js"></script>
+  <script src="dist/history.js"></script>
   <script type="text/javascript" src="index.js"></script>
 </body>
 </html>

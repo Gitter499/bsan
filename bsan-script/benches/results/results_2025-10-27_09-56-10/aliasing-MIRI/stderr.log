@@ -1,0 +1,4 @@
+error: unknown `-Z` flag specified: miri-tree-borrows
+
+For available unstable features, see https://doc.rust-lang.org/nightly/cargo/reference/unstable.html
+If you intended to use an unstable rustc feature, try setting `RUSTFLAGS="-Zmiri-tree-borrows"`

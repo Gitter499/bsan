@@ -1,0 +1,50 @@
+    Finished `release` profile [optimized] target(s) in 0.02s
+     Running `/root/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/bin/cargo-miri runner /workspaces/bsan/target/miri/aarch64-unknown-linux-gnu/release/read_write_disabled`
+warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+
+error: Undefined Behavior: reborrow through <265> at alloc130[0x0] is forbidden
+    --> /root/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/fmt/mod.rs:2871:1
+     |
+2871 | fmt_refs! { Debug, Display, Octal, Binary, LowerHex, UpperHex, LowerExp, UpperExp }
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Undefined Behavior occurred here
+     |
+     = help: this indicates a potential bug in the program: it performed an invalid operation, but the Tree Borrows rules it violated are still experimental
+     = help: see https://github.com/rust-lang/unsafe-code-guidelines/blob/master/wip/tree-borrows.md for further information
+     = help: the accessed tag <265> has state Disabled which forbids this reborrow (acting as a child read access)
+help: the accessed tag <265> was created here, in the initial state Reserved
+    --> bsan-script/benches/programs/src/bin/read_write_disabled.rs:12:20
+     |
+  12 |     let reserved = &mut root;
+     |                    ^^^^^^^^^
+help: the accessed tag <265> later transitioned to Disabled due to a foreign write access at offsets [0x0..0x4]
+    --> bsan-script/benches/programs/src/bin/read_write_disabled.rs:2:14
+     |
+   2 |     unsafe { *ptr = n };
+     |              ^^^^^^^^
+     = help: this transition corresponds to a loss of read and write permissions
+     = note: BACKTRACE (of the first span):
+     = note: inside `<&mut i32 as std::fmt::Display>::fmt` at /root/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/fmt/mod.rs:2865:71: 2865:78
+     = note: inside `core::fmt::rt::Argument::<'_>::fmt` at /root/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/fmt/rt.rs:152:76: 152:95
+     = note: inside `std::fmt::write` at /root/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/fmt/mod.rs:1680:17: 1682:80
+     = note: inside `std::io::default_write_fmt::<std::io::StdoutLock<'_>>` at /root/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/io/mod.rs:639:11: 639:40
+     = note: inside `<std::io::StdoutLock<'_> as std::io::Write>::write_fmt` at /root/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/io/mod.rs:1954:13: 1954:42
+     = note: inside `<&std::io::Stdout as std::io::Write>::write_fmt` at /root/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/io/stdio.rs:834:9: 834:36
+     = note: inside `<std::io::Stdout as std::io::Write>::write_fmt` at /root/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/io/stdio.rs:808:9: 808:33
+     = note: inside `std::io::stdio::print_to::<std::io::Stdout>` at /root/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/io/stdio.rs:1164:21: 1164:47
+     = note: inside `std::io::_print` at /root/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/io/stdio.rs:1275:5: 1275:37
+note: inside `read_write_disabled`
+    --> bsan-script/benches/programs/src/bin/read_write_disabled.rs:23:5
+     |
+  23 |     println!("{}", reserved);
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^
+note: inside `main`
+    --> bsan-script/benches/programs/src/bin/read_write_disabled.rs:27:5
+     |
+  27 |     read_write_disabled();
+     |     ^^^^^^^^^^^^^^^^^^^^^
+     = note: this error originates in the macro `fmt_refs` which comes from the expansion of the macro `println` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
+
+error: aborting due to 1 previous error; 1 warning emitted
+

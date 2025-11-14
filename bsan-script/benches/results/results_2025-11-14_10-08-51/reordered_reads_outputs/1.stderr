@@ -1,0 +1,9 @@
+    Finished `release` profile [optimized] target(s) in 0.02s
+     Running `/root/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/bin/cargo-miri runner /workspaces/bsan/target/miri/aarch64-unknown-linux-gnu/release/reordered_reads`
+warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+
+
+thread 'main' (1000) panicked at bsan-script/benches/programs/src/bin/reordered_reads.rs:5:5:
+not yet implemented: Implement reordered reads
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+note: in Miri, you may have to set `MIRIFLAGS=-Zmiri-env-forward=RUST_BACKTRACE` for the environment variable to have an effect

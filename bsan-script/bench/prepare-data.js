@@ -47,10 +47,14 @@ if (fs.existsSync(ARTIFACTS_BASE_DIR)) {
 
     const runDirs = fs.readdirSync(archDirPath, { withFileTypes: true })
       .filter(dirent => dirent.isDirectory())
-      .map(dirent => dirent.name);
+      .map(dirent => dirent.name)
+      .sort()
+      .reverse(); // Sort to get the latest run first
 
-    for (const runDirName of runDirs) {
-      const runDirPath = path.join(archDirPath, runDirName);
+    if (runDirs.length > 0) {
+      const latestRunDir = runDirs[0];
+      const runDirPath = path.join(archDirPath, latestRunDir);
+      console.log(`Processing latest run for ${architecture}: ${latestRunDir}`);
       processRunDir(runDirPath, architecture);
     }
   }
@@ -58,13 +62,17 @@ if (fs.existsSync(ARTIFACTS_BASE_DIR)) {
 
 // Process local results if the directory exists
 if (fs.existsSync(LOCAL_RESULTS_DIR)) {
-  benchmarkData['local-run'] = {};
   const runDirs = fs.readdirSync(LOCAL_RESULTS_DIR, { withFileTypes: true })
     .filter(dirent => dirent.isDirectory())
-    .map(dirent => dirent.name);
+    .map(dirent => dirent.name)
+    .sort()
+    .reverse(); // Sort to get the latest run first
 
-  for (const runDirName of runDirs) {
-    const runDirPath = path.join(LOCAL_RESULTS_DIR, runDirName);
+  if (runDirs.length > 0) {
+    const latestRunDir = runDirs[0];
+    const runDirPath = path.join(LOCAL_RESULTS_DIR, latestRunDir);
+    benchmarkData['local-run'] = {};
+    console.log(`Processing latest local run: ${latestRunDir}`);
     processRunDir(runDirPath, 'local-run');
   }
 }

@@ -120,319 +120,198 @@ impl Command {
     }
 
                 fn bench(
-
                     env: &mut BsanEnv,
-
                     runs: i32,
-
                     warmups: i32,
-
                     tools: Vec<BenchTool>,
-
                     miri_flags: Vec<String>,
-
                 ) -> Result<()> {
-
                     println!("Benchmarking...");
-
             
-
                     // Ensure hyperfine is installed
-
                     cmd!(env.sh, "cargo install hyperfine --locked")
-
                         .quiet()
-
                         .run()
-
                         .context("Failed to install hyperfine")?;
-
             
-
                     let bench_path = path!(env.root_dir / "bsan-script" / "benches");
-
             
-
                     if !env.sh.path_exists(&bench_path) {
-
                         return Err(anyhow!("Corrupted work tree! benches submodule missing!"));
-
                     }
-
             
-
                     env.sh.change_dir(&bench_path);
-
             
-
                     let target_dir = path!(&bench_path / "programs" / "src" / "bin");
-
                     let time = Local::now().format("%Y-%m-%d_%H-%M-%S");
-
                     let results_dir = path!(&bench_path / "results" / format!("results_{}", &time));
-
                     env.sh
-
                         .create_dir(&results_dir)
-
                         .context("Failed to create results directory!")?;
-
             
-
+                    // Define and set Miri flags
                     let default_miri_flags: Vec<String> = vec![
-
                         "-Zmiri-tree-borrows",
-
                         "-Zmiri-ignore-leaks",
-
                         "-Zmiri-disable-alignment-check",
-
                         "-Zmiri-disable-data-race-detector",
-
                         "-Zmiri-disable-validation",
-
                         "-Zmiri-disable-weak-memory-emulation",
-
                     ]
-
                     .iter()
-
                     .map(|s| s.to_string())
-
                     .collect();
-
             
-
                     let flags = if miri_flags.is_empty() { default_miri_flags } else { miri_flags };
-
             
-
-                                        let plugin = env.build_artifact(BsanPass, &[])?;
-
+                    let plugin = env.build_artifact(BsanPass, &[])?;
+                    let runtime = env.build_artifact(BsanRt, &[])?;
+                    let driver = env.build_artifact(BsanDriver, &[])?;
             
-
-                                        let runtime = env.build_artifact(BsanRt, &[])?;
-
-            
-
-                                        let driver = env.build_artifact(BsanDriver, &[])?;
-
-            
-
-                    
-
-            
-
                     env.sh.set_var("BSAN_PLUGIN", &plugin);
-
                     env.sh.set_var("BSAN_RT", &runtime);
 
                     for file_path in env
-
                         .sh
-
                         .read_dir(target_dir)
-
                         .context("Corrupt benches submodule! Failed to read over target programs")?
-
                     {
-
                         let file = file_path.file_name().unwrap();
-
                         let program_name = file.to_str().unwrap().strip_suffix(".rs").unwrap();
-
-                        let binary_path = path!(env.root_dir / "target" / "release" / program_name);
-
             
-
-                                    println!(
-
+                        println!(
+                            "\n==============================\nBenchmarking: {}\n\nRun Spec:\n    Differentially testing against: {:?}\n    Runs: {}\n    Warmup per experiment: {}\n==============================\n",
+                            program_name, tools, runs, warmups
+                        );
             
-
-                                        "\n==============================\nBenchmarking: {}\n\nRun Spec:\n    Differentially testing against: {:?}\n    Runs: {}\n    Warmup per experiment: {}\n==============================\n",
-
-            
-
-                                        program_name, tools, runs, warmups
-
-            
-
-                                    );
-
-            
-
                         let mut commands: Vec<String> = Vec::new();
-
                         let mut command_labels: Vec<String> = Vec::new();
-
             
-
                         if tools.contains(&BenchTool::BSAN) {
-
-                            cmd!(env.sh, "cargo clean --manifest-path ./programs/Cargo.toml -p programs --release")
-
+                            cmd!(env.sh, "cargo +bsan clean --manifest-path ./programs/Cargo.toml -p programs --release")
                                 .quiet()
-
                                 .run()?;
-
-                            cmd!(env.sh, "cargo build --manifest-path ./programs/Cargo.toml -p programs --release --bin {program_name}")
-
+                            cmd!(env.sh, "cargo +bsan build --manifest-path ./programs/Cargo.toml -p programs --release --bin {program_name}")
                                 .env("RUSTC_WRAPPER", &driver)
-
                                 .quiet()
-
                                 .run()
-
                                 .context("Failed to build instrumented program with cargo")?;
-
-            
-
+                            let binary_path = path!(env.root_dir / "target" / "release" / program_name);
                             let dest_path = path!(env.root_dir / "target" / "release" / format!("{program_name}-bsan"));
-
                             fs::copy(&binary_path, &dest_path)?;
-
                             commands.push(format!("../../target/release/{program_name}-bsan"));
-
-                            command_labels.push("BSAN".to_string());
-
+                            command_labels.push("BorrowSanitizer".to_string());
                         }
-
             
-
                         if tools.contains(&BenchTool::MIRI) {
+                            cmd!(env.sh, "rustup component add miri --toolchain nightly")
+                                .quiet()
+                                .run()
+                                .context("Failed to install Miri component for nightly toolchain")?;
 
                             env.sh.set_var("MIRIFLAGS", &flags.join(" "));
-
-                            cmd!(env.sh, "cargo miri setup")
-
+                            cmd!(env.sh, "cargo +nightly miri setup")
                                 .quiet()
-
                                 .run()
-
                                 .context("Failed to setup Miri")?;
-
-                            commands.push(format!("cargo miri run --manifest-path ./programs/Cargo.toml --release -p programs --bin {program_name}"));
-
+                            commands.push(format!("cargo +nightly miri run --manifest-path ./programs/Cargo.toml --release -p programs --bin {program_name}"));
                             command_labels.push("Miri".to_string());
-
                         }
-
             
-
                         if tools.contains(&BenchTool::NATIVE) {
-
                             cmd!(env.sh, "cargo clean --manifest-path ./programs/Cargo.toml -p programs --release")
-
                                 .quiet()
-
                                 .run()?;
-
                             cmd!(env.sh, "cargo build --manifest-path ./programs/Cargo.toml -p programs --release --bin {program_name}")
-
                                 .env("RUSTC_WRAPPER", "")
-
                                 .quiet()
-
                                 .run()
-
                                 .context("Failed to build uninstrumented program with cargo")?;
-
-            
-
+                            let binary_path = path!(env.root_dir / "target" / "release" / program_name);
                             let dest_path = path!(env.root_dir / "target" / "release" / format!("{program_name}-native"));
-
                             fs::copy(&binary_path, &dest_path)?;
-
                             commands.push(format!("../../target/release/{program_name}-native"));
-
                             command_labels.push("Native".to_string());
-
                         }
-
             
-
                         if tools.contains(&BenchTool::ASAN) {
-
-                            cmd!(env.sh, "cargo clean --manifest-path ./programs/Cargo.toml -p programs --release")
-
+                            cmd!(env.sh, "cargo +nightly clean --manifest-path ./programs/Cargo.toml -p programs --release")
                                 .quiet()
-
                                 .run()?;
-
                             cmd!(
-
                                 env.sh,
-
                                 "cargo +nightly build --manifest-path ./programs/Cargo.toml -Zbuild-std -p programs --release --bin {program_name}"
-
                             )
-
                             .env("RUSTFLAGS", "-Zsanitizer=address")
-
                             .env("RUSTC_WRAPPER", "")
-
                             .quiet()
-
                             .run()
-
                             .context("Failed to build ASAN program")?;
-
-            
-
+                            let binary_path = path!(env.root_dir / "target" / "release" / program_name);
                             let dest_path = path!(env.root_dir / "target" / "release" / format!("{program_name}-asan"));
-
                             fs::copy(&binary_path, &dest_path)?;
-
                             commands.push(format!("../../target/release/{program_name}-asan"));
-
                             command_labels.push("ASAN".to_string());
-
                         }
-
             
+                        // WRAPPER LOGIC
+                        let temp_out_dir = path!(&results_dir / format!("{}_outputs", program_name));
+                        env.sh.create_dir(&temp_out_dir)?;
+                        let mut wrapped_commands = Vec::new();
+                        let mut output_paths = Vec::new();
 
+                        for (i, command) in commands.iter().enumerate() {
+                            let stdout_path = path!(&temp_out_dir / format!("{}.stdout", i));
+                            let stderr_path = path!(&temp_out_dir / format!("{}.stderr", i));
+                            let wrapped = format!("bash -c '{command} > {stdout} 2> {stderr}'",
+                                command = command.replace('\'', "'\\''"), // Escape single quotes
+                                stdout = stdout_path.display(),
+                                stderr = stderr_path.display()
+                            );
+                            wrapped_commands.push(wrapped);
+                            output_paths.push((stdout_path, stderr_path));
+                        }
+                        // END WRAPPER LOGIC
+            
+                        let results_json_path = format!("{}/{}-results.json", results_dir.display(), program_name);
                         let mut hyperfine_cmd = cmd!(env.sh, "hyperfine -i -N");
-
                         hyperfine_cmd = hyperfine_cmd
-
                             .arg("--warmup")
-
                             .arg(warmups.to_string())
-
                             .arg("--runs")
-
                             .arg(runs.to_string())
-
                             .arg("--export-json")
-
-                            .arg(format!("{}/{}-results.json", results_dir.display(), program_name));
-
+                            .arg(&results_json_path);
             
-
-                                                for label in &command_labels {
-
+                        for label in &command_labels {
+                            hyperfine_cmd = hyperfine_cmd.arg("--command-name").arg(label);
+                        }
             
-
-                                                    hyperfine_cmd = hyperfine_cmd.arg("--command-name").arg(label);
-
+                        hyperfine_cmd = hyperfine_cmd.args(&wrapped_commands);
             
-
-                                                }
-
-            
-
-                                                hyperfine_cmd = hyperfine_cmd.args(&commands);
-
-            
-
                         hyperfine_cmd.run().context("Failed to run benchmark with hyperfine")?;
 
+                        // POST-PROCESSING LOGIC
+                        let json_content = fs::read_to_string(&results_json_path)?;
+                        let mut hyperfine_data: serde_json::Value = serde_json::from_str(&json_content)?;
+
+                        if let Some(results) = hyperfine_data.get_mut("results").and_then(|r| r.as_array_mut()) {
+                            for (i, result) in results.iter_mut().enumerate() {
+                                if let Some(result_obj) = result.as_object_mut() {
+                                    let (stdout_path, stderr_path) = &output_paths[i];
+                                    let stdout_content = fs::read_to_string(stdout_path).unwrap_or_default();
+                                    let stderr_content = fs::read_to_string(stderr_path).unwrap_or_default();
+
+                                    result_obj.insert("stdout".to_string(), serde_json::Value::String(stdout_content));
+                                    result_obj.insert("stderr".to_string(), serde_json::Value::String(stderr_content));
+                                }
+                            }
+                        }
+                        fs::write(&results_json_path, serde_json::to_string_pretty(&hyperfine_data)?)?;
+                        // END POST-PROCESSING LOGIC
                     }
-
             
-
                     Ok(())
-
                 }    fn inst(env: &mut BsanEnv, file: String, args: &[String]) -> Result<()> {
         let plugin = env.build_artifact(BsanPass, &[])?;
         let runtime = env.build_artifact(BsanRt, &[])?;

@@ -1,0 +1,62 @@
+    Finished `release` profile [optimized] target(s) in 0.03s
+     Running `/root/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/bin/cargo-miri runner /workspaces/bsan/target/miri/aarch64-unknown-linux-gnu/release/invalidate_protection`
+warning[E0133]: dereference of raw pointer is unsafe and requires unsafe block
+  --> bsan-script/benches/programs/src/bin/invalidate_protection.rs:26:24
+   |
+26 |     let new_ref = &mut *cast_to_mut(ptr);
+   |                        ^^^^^^^^^^^^^^^^^ dereference of raw pointer
+   |
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+   = note: raw pointers may be null, dangling or unaligned; they can violate aliasing rules and cause data races: all of these are undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+  --> bsan-script/benches/programs/src/bin/invalidate_protection.rs:17:1
+   |
+17 | unsafe fn invalidate_protection() {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: `#[warn(unsafe_op_in_unsafe_fn)]` (part of `#[warn(rust_2024_compatibility)]`) on by default
+
+warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+
+error: Undefined Behavior: write access through <273> at alloc130[0x0] is forbidden
+  --> bsan-script/benches/programs/src/bin/invalidate_protection.rs:2:14
+   |
+ 2 |     unsafe { *ptr = n };
+   |              ^^^^^^^^ Undefined Behavior occurred here
+   |
+   = help: this indicates a potential bug in the program: it performed an invalid operation, but the Tree Borrows rules it violated are still experimental
+   = help: see https://github.com/rust-lang/unsafe-code-guidelines/blob/master/wip/tree-borrows.md for further information
+   = help: the accessed tag <273> has state Reserved (conflicted) which forbids this child write access
+help: the accessed tag <273> was created here, in the initial state Reserved
+  --> bsan-script/benches/programs/src/bin/invalidate_protection.rs:9:12
+   |
+ 9 | fn protect(x: &mut i32, mut closure: impl FnMut()) -> i32 {
+   |            ^
+help: the accessed tag <273> later transitioned to Reserved (conflicted) due to a reborrow (acting as a foreign read access) at offsets [0x0..0x4]
+  --> bsan-script/benches/programs/src/bin/invalidate_protection.rs:9:25
+   |
+ 9 | fn protect(x: &mut i32, mut closure: impl FnMut()) -> i32 {
+   |                         ^^^^^^^^^^^
+   = help: this transition corresponds to a temporary loss of write permissions until function exit
+   = note: BACKTRACE (of the first span):
+   = note: inside `change` at bsan-script/benches/programs/src/bin/invalidate_protection.rs:2:14: 2:22
+note: inside `protect::<{closure@bsan-script/benches/programs/src/bin/invalidate_protection.rs:28:19: 28:26}>`
+  --> bsan-script/benches/programs/src/bin/invalidate_protection.rs:11:5
+   |
+11 |     change(ptr, 16);
+   |     ^^^^^^^^^^^^^^^
+note: inside `invalidate_protection`
+  --> bsan-script/benches/programs/src/bin/invalidate_protection.rs:32:5
+   |
+32 |     protect(&mut root, closure);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: inside `main`
+  --> bsan-script/benches/programs/src/bin/invalidate_protection.rs:38:14
+   |
+38 |     unsafe { invalidate_protection(); }
+   |              ^^^^^^^^^^^^^^^^^^^^^^^
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
+
+error: aborting due to 1 previous error; 2 warnings emitted
+
+For more information about this error, try `rustc --explain E0133`.

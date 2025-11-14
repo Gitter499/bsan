@@ -50,27 +50,40 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout main branch
         uses: actions/checkout@v4
+        with:
+          path: main
+
+      - name: Checkout gh-pages branch for history
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: gh-pages
+        continue-on-error: true # It's okay if gh-pages doesn't exist yet
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: main/artifacts
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Prepare data
-        working-directory: ./bsan-script/bench
+      - name: Prepare data for current run
         run: node prepare-data.js
+        working-directory: ./main/bsan-script/bench
 
-      - name: Upload artifact
+      - name: Update history file
+        run: node update-history.js ${{ github.sha }}
+        working-directory: ./main/bsan-script/bench
+
+      - name: Upload artifact for deployment
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./bsan-script/bench
+          path: ./main/bsan-script/bench
 
   deploy:
     needs: process-and-deploy

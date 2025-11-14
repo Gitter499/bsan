@@ -1,0 +1,35 @@
+    Finished `release` profile [optimized] target(s) in 0.02s
+     Running `/root/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/bin/cargo-miri runner /workspaces/bsan/target/miri/aarch64-unknown-linux-gnu/release/frozen_permission_write_through`
+warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+
+error: Undefined Behavior: write access through <264> at alloc130[0x0] is forbidden
+  --> bsan-script/benches/programs/src/bin/frozen_permission_write_through.rs:2:14
+   |
+ 2 |     unsafe { *ptr = n };
+   |              ^^^^^^^^ Undefined Behavior occurred here
+   |
+   = help: this indicates a potential bug in the program: it performed an invalid operation, but the Tree Borrows rules it violated are still experimental
+   = help: see https://github.com/rust-lang/unsafe-code-guidelines/blob/master/wip/tree-borrows.md for further information
+   = help: the accessed tag <264> has state Frozen which forbids this child write access
+help: the accessed tag <264> was created here, in the initial state Frozen
+  --> bsan-script/benches/programs/src/bin/frozen_permission_write_through.rs:14:22
+   |
+14 |     let ref_shared = &root;
+   |                      ^^^^^
+   = note: BACKTRACE (of the first span):
+   = note: inside `change` at bsan-script/benches/programs/src/bin/frozen_permission_write_through.rs:2:14: 2:22
+note: inside `frozen_permission_write_through`
+  --> bsan-script/benches/programs/src/bin/frozen_permission_write_through.rs:18:5
+   |
+18 |     change(cast_to_mut(ptr), 12);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: inside `main`
+  --> bsan-script/benches/programs/src/bin/frozen_permission_write_through.rs:24:5
+   |
+24 |     frozen_permission_write_through();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
+
+error: aborting due to 1 previous error; 1 warning emitted
+

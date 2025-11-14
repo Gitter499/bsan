@@ -1,0 +1,17 @@
+    Finished `release` profile [optimized] target(s) in 0.02s
+     Running `/root/.rustup/toolchains/bsan/bin/cargo-miri runner /workspaces/bsan/target/miri/aarch64-unknown-linux-gnu/release/frozen_permission_write_through`
+warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+
+error: Undefined Behavior: using uninitialized data, but this operation requires initialized memory
+   --> /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/rt.rs:206:9
+    |
+206 |         &move || crate::sys::backtrace::__rust_begin_short_backtrace(main).report().to_i32(),
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Undefined Behavior occurred here
+    |
+    = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
+    = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
+    = note: BACKTRACE:
+    = note: inside `std::rt::lang_start::<()>` at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/rt.rs:206:9: 206:93
+
+error: aborting due to 1 previous error; 1 warning emitted
+

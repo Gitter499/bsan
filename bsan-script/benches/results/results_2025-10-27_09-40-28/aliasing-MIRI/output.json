@@ -1,0 +1,1 @@
+{"exit_code": $EXIT_CODE, "stdout": "/workspaces/bsan/bsan-script/benches/results/results_2025-10-27_09-40-28/aliasing-MIRI/stdout.log", "stderr": "/workspaces/bsan/bsan-script/benches/results/results_2025-10-27_09-40-28/aliasing-MIRI/stderr.log"}

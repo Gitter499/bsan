@@ -1,0 +1,4 @@
+    Finished `release` profile [optimized] target(s) in 0.02s
+     Running `/root/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/bin/cargo-miri runner /workspaces/bsan/target/miri/aarch64-unknown-linux-gnu/release/hello_stress`
+warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+

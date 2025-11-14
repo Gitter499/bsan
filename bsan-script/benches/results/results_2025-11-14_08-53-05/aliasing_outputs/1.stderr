@@ -1,0 +1,91 @@
+    Finished `release` profile [optimized] target(s) in 0.01s
+     Running `/root/.rustup/toolchains/bsan/bin/cargo-miri runner /workspaces/bsan/target/miri/aarch64-unknown-linux-gnu/release/aliasing`
+warning: unused variable: `reserved_ptr`
+  --> bsan-script/benches/programs/src/bin/aliasing.rs:36:9
+   |
+36 |     let reserved_ptr = reserved as *mut i32;
+   |         ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_reserved_ptr`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning[E0133]: dereference of raw pointer is unsafe and requires unsafe block
+  --> bsan-script/benches/programs/src/bin/aliasing.rs:61:24
+   |
+61 |     let new_ref = &mut *cast_to_mut(ptr);
+   |                        ^^^^^^^^^^^^^^^^^ dereference of raw pointer
+   |
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+   = note: raw pointers may be null, dangling or unaligned; they can violate aliasing rules and cause data races: all of these are undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+  --> bsan-script/benches/programs/src/bin/aliasing.rs:52:1
+   |
+52 | unsafe fn invalidate_protection() {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: `#[warn(unsafe_op_in_unsafe_fn)]` (part of `#[warn(rust_2024_compatibility)]`) on by default
+
+warning: unused variable: `root`
+  --> bsan-script/benches/programs/src/bin/aliasing.rs:74:9
+   |
+74 |     let root: i32 = 42;
+   |         ^^^^ help: if this is intentional, prefix it with an underscore: `_root`
+
+warning: function `change` is never used
+ --> bsan-script/benches/programs/src/bin/aliasing.rs:1:4
+  |
+1 | fn change(ptr: *mut i32, n: i32) {
+  |    ^^^^^^
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `cast_to_mut` is never used
+ --> bsan-script/benches/programs/src/bin/aliasing.rs:5:4
+  |
+5 | fn cast_to_mut(ptr: *const i32) -> *mut i32 {
+  |    ^^^^^^^^^^^
+
+warning: function `frozen_permission_write_through` is never used
+  --> bsan-script/benches/programs/src/bin/aliasing.rs:10:4
+   |
+10 | fn frozen_permission_write_through() {
+   |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `read_write_disabled` is never used
+  --> bsan-script/benches/programs/src/bin/aliasing.rs:24:4
+   |
+24 | fn read_write_disabled() {
+   |    ^^^^^^^^^^^^^^^^^^^
+
+warning: function `protect` is never used
+  --> bsan-script/benches/programs/src/bin/aliasing.rs:44:4
+   |
+44 | fn protect(x: &mut i32, mut closure: impl FnMut()) -> i32 {
+   |    ^^^^^^^
+
+warning: function `invalidate_protection` is never used
+  --> bsan-script/benches/programs/src/bin/aliasing.rs:52:11
+   |
+52 | unsafe fn invalidate_protection() {
+   |           ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `reordered_reads` is never used
+  --> bsan-script/benches/programs/src/bin/aliasing.rs:73:4
+   |
+73 | fn reordered_reads() {
+   |    ^^^^^^^^^^^^^^^
+
+warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+
+error: Undefined Behavior: using uninitialized data, but this operation requires initialized memory
+   --> /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/rt.rs:206:9
+    |
+206 |         &move || crate::sys::backtrace::__rust_begin_short_backtrace(main).report().to_i32(),
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Undefined Behavior occurred here
+    |
+    = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
+    = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
+    = note: BACKTRACE:
+    = note: inside `std::rt::lang_start::<()>` at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/rt.rs:206:9: 206:93
+
+error: aborting due to 1 previous error; 11 warnings emitted
+
+For more information about this error, try `rustc --explain E0133`.

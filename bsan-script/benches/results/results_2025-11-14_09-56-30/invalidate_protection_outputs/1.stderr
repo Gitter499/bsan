@@ -1,0 +1,33 @@
+    Finished `release` profile [optimized] target(s) in 0.02s
+     Running `/root/.rustup/toolchains/bsan/bin/cargo-miri runner /workspaces/bsan/target/miri/aarch64-unknown-linux-gnu/release/invalidate_protection`
+warning[E0133]: dereference of raw pointer is unsafe and requires unsafe block
+  --> bsan-script/benches/programs/src/bin/invalidate_protection.rs:26:24
+   |
+26 |     let new_ref = &mut *cast_to_mut(ptr);
+   |                        ^^^^^^^^^^^^^^^^^ dereference of raw pointer
+   |
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+   = note: raw pointers may be null, dangling or unaligned; they can violate aliasing rules and cause data races: all of these are undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+  --> bsan-script/benches/programs/src/bin/invalidate_protection.rs:17:1
+   |
+17 | unsafe fn invalidate_protection() {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: `#[warn(unsafe_op_in_unsafe_fn)]` (part of `#[warn(rust_2024_compatibility)]`) on by default
+
+warning: Miri does not support optimizations: the opt-level is ignored. The only effect of selecting a Cargo profile that enables optimizations (such as --release) is to apply its remaining settings, such as whether debug assertions and overflow checks are enabled.
+
+error: Undefined Behavior: using uninitialized data, but this operation requires initialized memory
+   --> /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/rt.rs:206:9
+    |
+206 |         &move || crate::sys::backtrace::__rust_begin_short_backtrace(main).report().to_i32(),
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Undefined Behavior occurred here
+    |
+    = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
+    = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
+    = note: BACKTRACE:
+    = note: inside `std::rt::lang_start::<()>` at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/rt.rs:206:9: 206:93
+
+error: aborting due to 1 previous error; 2 warnings emitted
+
+For more information about this error, try `rustc --explain E0133`.
