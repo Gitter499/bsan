@@ -9,3 +9,6 @@ CMakeFiles
 *.a
 *.o
 .toolchain
+
+
+./bsan-script/benches/results
