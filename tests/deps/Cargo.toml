@@ -1,0 +1,15 @@
+[package]
+authors = ["BorrowSanitizer Team"]
+description = "dependencies that unit tests can have"
+license = "MIT OR Apache-2.0"
+name = "bsan-test-deps"
+repository = "https://github.com/borrowsanitizer/rust"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bsan-debug = { path = "../bsan-debug" }
+hashbrown = "0.15.4"
+libc = "0.2.174"
+
+[workspace]

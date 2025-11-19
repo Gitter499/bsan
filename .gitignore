@@ -1,0 +1,14 @@
+target
+Makefile
+CMakeCache.txt
+CMakeFiles
+.toolchain
+*.tar.*
+*.ll
+*.bc
+*.a
+*.o
+.toolchain
+
+
+./bsan-script/benches/results
