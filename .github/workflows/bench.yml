@@ -20,6 +20,12 @@ concurrency:
   group: benchmarks-${{ github.ref }}
   cancel-in-progress: false
 env:
+  # The crates to benchmark, on `main` and on branches alike.
+  CRATES_JSON: tests/benches/top-crates.json
+  # The most bench jobs a run spawns, split evenly between the targets. Each
+  # job takes a group of crates. Every job holds one of the account's concurrent
+  # job slots, which other workflows share, for as long as it runs.
+  MAX_BENCH_JOBS: 20
   # Every target is benchmarked on its own runner.
   TARGETS: >-
     [{"target": "aarch64-unknown-linux-gnu", "os": "ubuntu-24.04-arm"},
@@ -31,7 +37,9 @@ jobs:
   # own runs publish their raw results to gh-pages (main/raw.csv), so a branch
   # only benchmarks `main` itself for the targets and crates those results do not
   # cover, e.g. before `main` has published any, or for a crate the branch added
-  # or bumped.
+  # or bumped. It does so in the same job as the branch, on the same runner.
+  #
+  # See bench_plan.py for how crates are grouped into jobs.
   setup:
     name: Plan runs
     runs-on: ubuntu-latest
@@ -71,11 +79,13 @@ jobs:
           cache_args=(--main-cache main-cache/raw.csv)
         fi
         matrix=$(python3 bsan-script/etc/bench_plan.py \
-          tests/benches/crates.json "$RUNNER_TEMP/targets.json" \
+          "$CRATES_JSON" "$RUNNER_TEMP/targets.json" \
           --ref-name "$GITHUB_REF_NAME" --sha "$GITHUB_SHA" --main-sha "$main_sha" \
+          --max-jobs "$MAX_BENCH_JOBS" \
           "${cache_args[@]}")
-        n_main=$(jq '[.include[] | select(.label == "main")] | length' <<< "$matrix")
-        n_branch=$(jq '[.include[] | select(.label == "branch")] | length' <<< "$matrix")
+        count='[.include[].CRATES | split(" ") | map(select(. != "")) | length] | add // 0'
+        n_main=$(jq "${count//CRATES/main_crates}" <<< "$matrix")
+        n_branch=$(jq "${count//CRATES/branch_crates}" <<< "$matrix")
         # The cache is used for whatever this run does not benchmark itself.
         cached=""
         if [ -f main-cache/raw.csv ] && [ "$n_main" -lt "$n_branch" ]; then
@@ -111,34 +121,28 @@ jobs:
     defaults:
       run:
         shell: bash
-    name: "${{ matrix.label }}: ${{ matrix.crate }} (${{ matrix.target }})"
+    name: "${{ matrix.target }} #${{ matrix.group }}"
+    env:
+      TARGET: ${{ matrix.target }}
+      GROUP: ${{ matrix.group }}
+      MIRI: ${{ matrix.miri }}
+      MODES: ${{ matrix.modes }}
     steps:
-    # The BorrowSanitizer under test: the branch, or `main` for the baseline.
+    # The commit being run: on a branch, the BorrowSanitizer under test. It also
+    # provides the harness for both sides, so both are measured by the same
+    # bench.py over the same crates.json.
     - uses: actions/checkout@v7
-      with:
-        ref: ${{ matrix.ref }}
-    # The harness always comes from the commit being run, so both sides of a
-    # comparison are measured by the same bench.py over the same crates.json.
-    - name: Check out benchmark harness
+    # The baseline, when this job measures `main` too.
+    - name: Check out main
+      if: matrix.main_crates != '' && matrix.main_ref != github.sha
       uses: actions/checkout@v7
       with:
-        path: .bench-harness
-        sparse-checkout: |
-          bsan-script/etc
-          tests/benches
+        ref: ${{ matrix.main_ref }}
+        path: .main
     - name: Setup dependencies
       run: |
         ln -s /root/.rustup/ $HOME/.rustup
         sudo apt-get update && sudo apt-get install -y hyperfine jq
-    - name: Build and Install Latest Version
-      run: ./xb install
-    - name: Set output filename
-      id: filename
-      env:
-        LABEL: ${{ matrix.label }}
-        TARGET: ${{ matrix.target }}
-        CRATE: ${{ matrix.crate }}
-      run: echo "results=results_${LABEL}_${TARGET}_${CRATE}" >> "$GITHUB_OUTPUT"
     # A failing test's output is printed to this job's log, and the report
     # links each failure here.
     - name: Resolve log URL
@@ -146,7 +150,7 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
         CHECK_RUN_ID: ${{ job.check_run_id }}
-        JOB_NAME: "${{ matrix.label }}: ${{ matrix.crate }} (${{ matrix.target }})"
+        JOB_NAME: "${{ matrix.target }} #${{ matrix.group }}"
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
         # A job's ID is its check run's ID. Older runners do not expose it, so
@@ -163,39 +167,62 @@ jobs:
         else
           echo "url=$RUN_URL" >> "$GITHUB_OUTPUT"
         fi
-    - name: Benchmarks
+    - name: Prepare benchmark script
       env:
-        TARGET: ${{ matrix.target }}
-        CRATE: ${{ matrix.crate }}
-        MIRI: ${{ matrix.miri }}
-        MODES: ${{ matrix.modes }}
         LOG_URL: ${{ steps.log.outputs.url }}
-        RESULTS: ${{ steps.filename.outputs.results }}
       run: |
-        flags=(--crate "$CRATE" --log-url "$LOG_URL")
-        if [ "$MIRI" != true ]; then
-          flags+=(--no-miri)
-        fi
-        for mode in $MODES; do
-          flags+=(--mode "$mode")
-        done
-        python3 ./.bench-harness/bsan-script/etc/bench.py \
-        "${flags[@]}" \
-        ./.bench-harness/tests/benches/crates.json \
-        "$TARGET" \
-        "$RESULTS.json" \
-        "$RESULTS.csv"
+        mkdir -p results
+        # Usage: bench.sh <side> <crate ...>. Writes results/results_<side>_*.
+        cat > "$RUNNER_TEMP/bench.sh" <<'EOF'
+        set -euo pipefail
+        side=$1; shift
+        flags=(--log-url "$LOG_URL")
+        for crate in "$@"; do flags+=(--crate "$crate"); done
+        if [ "$MIRI" != true ]; then flags+=(--no-miri); fi
+        for mode in $MODES; do flags+=(--mode "$mode"); done
+        out="$GITHUB_WORKSPACE/results/results_${side}_${TARGET}_${GROUP}"
+        python3 "$GITHUB_WORKSPACE/bsan-script/etc/bench.py" "${flags[@]}" \
+          "$GITHUB_WORKSPACE/$CRATES_JSON" "$TARGET" "$out.json" "$out.csv"
+        EOF
+        echo "LOG_URL=$LOG_URL" >> "$GITHUB_ENV"
+    - name: Benchmark branch
+      if: matrix.branch_crates != ''
+      env:
+        CRATES: ${{ matrix.branch_crates }}
+      run: |
+        ./xb install
+        # shellcheck disable=SC2086
+        bash "$RUNNER_TEMP/bench.sh" branch $CRATES
+    # Runs even if the branch did not build, so main's side is still measured.
+    - name: Benchmark main
+      if: ${{ !cancelled() && matrix.main_crates != '' }}
+      env:
+        CRATES: ${{ matrix.main_crates }}
+        MAIN_REF: ${{ matrix.main_ref }}
+      run: |
+        dir=.
+        if [ "$MAIN_REF" != "$GITHUB_SHA" ]; then dir=.main; fi
+        # cargo-bsan caches the instrumented sysroot it builds; drop the branch's
+        # so that main's is built by main's BorrowSanitizer.
+        rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}"/bsan "${XDG_CACHE_HOME:-$HOME/.cache}"/bsan-lto
+        (cd "$dir" && ./xb install)
+        # shellcheck disable=SC2086
+        bash "$RUNNER_TEMP/bench.sh" main $CRATES
+    # Whatever was measured is uploaded, even if a later step failed.
     - name: Upload results
+      if: ${{ !cancelled() }}
       uses: actions/upload-artifact@v7
       with:
-        name: ${{ steps.filename.outputs.results }}
-        path: |
-          ${{ steps.filename.outputs.results }}.json
-          ${{ steps.filename.outputs.results }}.csv
+        name: results_${{ matrix.target }}_${{ matrix.group }}
+        path: results/
+        if-no-files-found: warn
         retention-days: 30
   merge:
     name: Merge & Upload
     needs: [setup, bench]
+    # Publish whatever the bench jobs produced, even if some failed; the report
+    # lists the crates that have no results.
+    if: ${{ !cancelled() && needs.setup.result == 'success' }}
     runs-on: ubuntu-latest
     # Every publishing path below commits to `gh-pages`. The workflow-level group
     # is keyed on `github.ref`, which would let two branches race each other's
@@ -205,20 +232,12 @@ jobs:
       cancel-in-progress: false
     steps:
     - uses: actions/checkout@v7
-    - name: Download main results
-      if: needs.setup.outputs.bench_main == 'true'
+    - name: Download results
       uses: actions/download-artifact@v8
       with:
-        pattern: results_main_*
+        pattern: results_*
         merge-multiple: true
-        path: results/main/
-    - name: Download branch results
-      if: github.ref != 'refs/heads/main'
-      uses: actions/download-artifact@v8
-      with:
-        pattern: results_branch_*
-        merge-multiple: true
-        path: results/branch/
+        path: results/
     - name: Download main's published results
       if: needs.setup.outputs.cached_main_commit != ''
       uses: actions/download-artifact@v8
@@ -231,7 +250,14 @@ jobs:
       run: echo "name=results_$(date +%Y-%m-%d_%H-%M-%S)" >> "$GITHUB_OUTPUT"
     - name: Merge JSON files
       if: github.ref == 'refs/heads/main'
-      run: jq -s 'add' results/main/*.json > ${{ steps.merged_filename.outputs.name }}.json
+      run: |
+        shopt -s nullglob
+        files=(results/results_main_*.json)
+        if [ ${#files[@]} -eq 0 ]; then
+          echo "::error::No bench job produced results for main."
+          exit 1
+        fi
+        jq -s 'add' "${files[@]}" > ${{ steps.merged_filename.outputs.name }}.json
     - name: Upload merged results
       if: github.ref == 'refs/heads/main'
       uses: actions/upload-artifact@v7
@@ -284,7 +310,7 @@ jobs:
         git worktree add -B gh-pages "$PAGES" origin/gh-pages
         mkdir -p "$PAGES/main"
         # Every per-crate CSV has the same header; keep only the first one.
-        awk 'FNR == 1 && NR != 1 { next } { print }' results/main/*.csv > "$PAGES/main/raw.csv"
+        awk 'FNR == 1 && NR != 1 { next } { print }' results/results_main_*.csv > "$PAGES/main/raw.csv"
         jq -n --arg commit "$GITHUB_SHA" --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
           '{commit: $commit, generated: $generated}' > "$PAGES/main/meta.json"
         cd "$PAGES"
@@ -300,7 +326,6 @@ jobs:
       env:
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         MAIN_SHA: ${{ needs.setup.outputs.main_sha }}
-        BENCH_MAIN: ${{ needs.setup.outputs.bench_main }}
         CACHED_MAIN_COMMIT: ${{ needs.setup.outputs.cached_main_commit }}
       run: |
         set -euo pipefail
@@ -312,13 +337,18 @@ jobs:
           main_csvs+=(main-cache/raw.csv)
           commits+=(--main-commit "$CACHED_MAIN_COMMIT")
         fi
-        if [ "$BENCH_MAIN" = true ]; then
-          main_csvs+=(results/main/*.csv)
+        shopt -s nullglob
+        fresh=(results/results_main_*.csv)
+        if [ ${#fresh[@]} -gt 0 ]; then
+          main_csvs+=("${fresh[@]}")
           commits+=(--main-commit "$MAIN_SHA")
         fi
+        printf '%s' "$TARGETS" > "$RUNNER_TEMP/targets.json"
         python3 bsan-script/etc/branch_report.py data.json \
-          --branch-csv results/branch/*.csv \
+          --branch-csv results/results_branch_*.csv \
           --main-csv "${main_csvs[@]}" \
+          --crates "$CRATES_JSON" \
+          --targets "$RUNNER_TEMP/targets.json" \
           "${commits[@]}" \
           --branch "$GITHUB_REF_NAME" \
           --commit "$GITHUB_SHA" \

@@ -47,6 +47,9 @@ MODE_ORDER = ["full", "full-no-wildcard", "no-op", "native"]
 # builds says nothing. `main`'s cached results still carry Miri.
 IGNORED_MODES = {"miri-tb"}
 
+# The test name a whole-crate entry is listed under.
+WHOLE_CRATE = "(whole crate)"
+
 # A test counts toward a crate's total only with this status on both sides.
 COMPARABLE = "success"
 
@@ -59,7 +62,12 @@ def mode_key(mode):
 
 
 def read_rows(paths):
-    """Load CSVs into {(target, mode, crate, test): row}; the last row wins."""
+    """Load CSVs into {(target, mode, crate, test): row}; the last row wins.
+
+    A row with no test name records that a whole crate could not be measured
+    under that mode (it failed to download, build, or list its tests), and is
+    kept under the test name "".
+    """
     rows = {}
     for path in paths:
         with open(path, newline="") as f:
@@ -69,10 +77,10 @@ def read_rows(paths):
                 sys.exit(f"Error: {path} is missing column(s): "
                          f"{', '.join(sorted(missing))}")
             for row in reader:
-                if not row.get("test_name") or row["mode"] in IGNORED_MODES:
+                if row["mode"] in IGNORED_MODES:
                     continue
                 crate = f"{row['crate_name']}@{row['version']}"
-                rows[(row["target"], row["mode"], crate, row["test_name"])] = row
+                rows[(row["target"], row["mode"], crate, row["test_name"] or "")] = row
     return rows
 
 
@@ -102,14 +110,42 @@ def error(row):
     return fields if any(fields.values()) else None
 
 
-def build_mode(main_rows, branch_rows):
-    """Compare one (target, mode): {(crate, test): row} on each side."""
-    seconds = {"main": {}, "branch": {}}
-    counts = {}
-    dropped = []
+def summary(tests):
+    """One status for a side that did measure a crate's tests."""
+    if all(r["status"] == COMPARABLE for r in tests.values()):
+        return COMPARABLE
+    return "some tests failed"
 
-    for crate, test in sorted(set(main_rows) | set(branch_rows)):
-        m, b = main_rows.get((crate, test)), branch_rows.get((crate, test))
+
+def compare_crate(crate, main_tests, branch_tests, seconds, counts, dropped):
+    """Compare one crate: {test: row} on each side, "" for a whole-crate row."""
+    main_whole = main_tests.pop("", None)
+    branch_whole = branch_tests.pop("", None)
+
+    # When either side has nothing per test, whether because the crate did not
+    # build there or because its job never reported, compare the crate as one
+    # entry rather than listing every test the other side ran as "not run".
+    if main_whole or branch_whole or not main_tests or not branch_tests:
+        def side(whole, tests):
+            if whole:
+                return whole["status"], error(whole)
+            if tests:
+                return summary(tests), None
+            return "not run", None
+        (sm, em), (sb, eb) = side(main_whole, main_tests), side(branch_whole, branch_tests)
+        if sm == "not run" or sb == "not run":
+            missing = [n for n, st in (("main", sm), ("branch", sb)) if st == "not run"]
+            reason = f"no results on {' or '.join(missing)}"
+        elif sm != sb:
+            reason = "changed"
+        else:
+            reason = f"{sm} on both"
+        dropped.append({"crate": crate, "test": WHOLE_CRATE, "reason": reason,
+                        "main": sm, "branch": sb, "errors": {"main": em, "branch": eb}})
+        return
+
+    for test in sorted(set(main_tests) | set(branch_tests)):
+        m, b = main_tests.get(test), branch_tests.get(test)
         counts.setdefault(crate, {"kept": 0, "total": 0})
         counts[crate]["total"] += 1
         sm, sb = status(m), status(b)
@@ -132,19 +168,33 @@ def build_mode(main_rows, branch_rows):
                         "main": sm, "branch": sb,
                         "errors": {"main": error(m), "branch": error(b)}})
 
+
+def build_mode(main_rows, branch_rows, crates):
+    """Compare one (target, mode): {(crate, test): row} on each side, over
+    `crates`."""
+    seconds = {"main": {}, "branch": {}}
+    counts = {}
+    dropped = []
+
+    for crate in sorted(crates):
+        compare_crate(crate,
+                      {t: r for (c, t), r in main_rows.items() if c == crate},
+                      {t: r for (c, t), r in branch_rows.items() if c == crate},
+                      seconds, counts, dropped)
+
     # A crate with no comparable test has no point on either line.
-    crates = sorted((c for c in counts if counts[c]["kept"] > 0),
-                    key=lambda c: (seconds["main"][c], c))
+    kept = sorted((c for c in counts if counts[c]["kept"] > 0),
+                  key=lambda c: (seconds["main"][c], c))
 
     # A test whose result changed between main and the branch is a real finding;
     # the rest is usually a test that is simply unsupported everywhere.
     dropped.sort(key=lambda d: (d["reason"] != "changed", d["crate"], d["test"]))
 
     return {
-        "crates": crates,
-        "main": seconds["main"],
-        "branch": seconds["branch"],
-        "tests": {c: counts[c] for c in crates},
+        "crates": kept,
+        "main": {c: seconds["main"][c] for c in kept},
+        "branch": {c: seconds["branch"][c] for c in kept},
+        "tests": {c: counts[c] for c in kept},
         "dropped": dropped,
     }
 
@@ -154,12 +204,17 @@ def main(argv):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("output", type=Path)
     ap.add_argument("--branch-csv", type=Path, nargs="+", required=True)
-    ap.add_argument("--main-csv", type=Path, nargs="+", required=True)
+    ap.add_argument("--main-csv", type=Path, nargs="*", default=[])
     ap.add_argument("--branch", default="")
     ap.add_argument("--commit", default="")
     ap.add_argument("--main-commit", action="append", default=[],
                     help="A `main` commit the baseline was measured at (repeatable; "
                          "more than one when cached and fresh results are mixed).")
+    ap.add_argument("--crates", type=Path,
+                    help="The crates.json the run benchmarked; crates in it with no "
+                         "results on a side are listed as such.")
+    ap.add_argument("--targets", type=Path,
+                    help="A JSON list of {\"target\": ...} the run benchmarked.")
     ap.add_argument("--repo-url", default="")
     ap.add_argument("--run-url", default="")
     args = ap.parse_args(argv)
@@ -167,22 +222,26 @@ def main(argv):
     branch_rows = read_rows(args.branch_csv)
     main_rows = read_rows(args.main_csv)
     if not branch_rows:
-        sys.exit("Error: no test rows found in the branch CSVs.")
-    if not main_rows:
-        sys.exit("Error: no test rows found in the main CSVs.")
+        sys.exit("Error: no rows found in the branch CSVs.")
 
-    # Only a target and mode measured on both sides can be compared.
-    def keys(rows):
-        return {(tg, m) for tg, m, _, _ in rows}
-    pairs = keys(branch_rows) & keys(main_rows)
-    # `main`'s published results carry every mode, and a branch run measures
-    # only the ones it is compared under, so only the reverse is worth a warning.
-    for tg, m in sorted(keys(branch_rows) - keys(main_rows)):
-        print(f"warning: {m} on {tg} was not measured on main; skipped",
-              file=sys.stderr)
+    # What should have been measured, so a crate or a whole target that never
+    # reported, because its job failed, is listed rather than silently missing.
+    expected_targets = []
+    if args.targets:
+        expected_targets = [t["target"] for t in json.loads(args.targets.read_text())]
+    expected_crates = None
+    if args.crates:
+        expected_crates = {f"{c['name']}@{c['version']}"
+                           for c in json.loads(args.crates.read_text())}
 
-    targets = sorted({tg for tg, _ in pairs})
-    modes = sorted({m for _, m in pairs}, key=mode_key)
+    targets = sorted(set(expected_targets) | {tg for tg, _, _, _ in branch_rows})
+    # The modes this branch is compared under are the ones it measured.
+    modes = sorted({m for _, m, _, _ in branch_rows}, key=mode_key)
+    main_keys = {(tg, m) for tg, m, _, _ in main_rows}
+    for tg in targets:
+        for m in modes:
+            if (tg, m) not in main_keys:
+                print(f"warning: {m} on {tg} has no results on main", file=sys.stderr)
 
     report = {
         "generated": int(time.time() * 1000),
@@ -197,16 +256,15 @@ def main(argv):
     for tg in targets:
         report["targets"][tg] = {}
         for m in modes:
-            if (tg, m) not in pairs:
-                continue
             side = lambda rows: {(c, t): r for (rtg, rm, c, t), r in rows.items()
                                  if rtg == tg and rm == m}
             branch_side = side(branch_rows)
             # `main`'s published results can cover crates, or crate versions,
             # that this branch no longer benchmarks; those are not a comparison.
-            crates = {c for c, _ in branch_side}
+            crates = (expected_crates if expected_crates is not None
+                      else {c for c, _ in branch_side})
             main_side = {k: r for k, r in side(main_rows).items() if k[0] in crates}
-            report["targets"][tg][m] = build_mode(main_side, branch_side)
+            report["targets"][tg][m] = build_mode(main_side, branch_side, crates)
 
     args.output.write_text(json.dumps(report, indent=2))
 

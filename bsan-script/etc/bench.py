@@ -7,6 +7,7 @@
 # * A CSV file listing the mean execution times of each mode, including
 #   both the baselines and tested configurations.
 import argparse
+import traceback
 import re
 import statistics
 import json
@@ -18,6 +19,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -198,6 +200,8 @@ def run_output(cmd: list[str], **kwargs) -> str:
 ARROW_LOCATION = re.compile(r"^\s*--> (?P<path>[^\s:][^:]*):(?P<line>\d+):(?P<col>\d+)")
 # `thread 'x' panicked at src/lib.rs:12:5:`, with the message on the next line.
 PANIC_LOCATION = re.compile(r"panicked at (?P<path>[^\s:][^:]*):(?P<line>\d+):(?P<col>\d+):?")
+# `error[E0308]: mismatched types`, as rustc prints it.
+COMPILER_ERROR = re.compile(r"^error(\[\w+\])?: ")
 # A dependency's source, as cargo unpacks it from a registry.
 REGISTRY_PATH = re.compile(
     r"/registry/src/[^/]+/(?P<name>[A-Za-z0-9_-]+?)-(?P<version>\d[^/]*)/(?P<rest>.+)$")
@@ -234,6 +238,16 @@ def describe_failure(output: str | None, src_dir: Path, log_url: str) -> dict:
                     loc = m
                     break
             break
+    if start is None:
+        # A compiler error, when a crate did not build.
+        for i, text in enumerate(lines):
+            if COMPILER_ERROR.match(text):
+                start, message = i, text.strip()
+                for later in lines[i + 1:]:
+                    if m := ARROW_LOCATION.match(later):
+                        loc = m
+                        break
+                break
     if start is None:
         for i, text in enumerate(lines):
             if m := PANIC_LOCATION.search(text):
@@ -309,18 +323,49 @@ def download_crate(crate: str, version: str, dest_dir: Path) -> Path:
         sys.exit(f"Error: expected extracted directory {extracted} not found.")
     return extracted
 
+class CrateFailure(Exception):
+    """A crate, or one configuration of it, could not be benchmarked at all.
+
+    Recorded in the CSV as a row with no test name, rather than aborting the
+    run: one crate that fails to build should not cost every other crate in the
+    job its results.
+    """
+    def __init__(self, status: str, message: str, output: str = ""):
+        super().__init__(message)
+        self.status = status
+        self.output = output or message
+
+def compiler_output(stdout: str, stderr: str) -> str:
+    """The human-readable output of a failed `--message-format=json` build.
+
+    Diagnostics are rendered into the JSON on stdout; stderr only has cargo's
+    own summary.
+    """
+    rendered = []
+    for msg in TestHarnessJSON(stdout or ""):
+        if msg.get("reason") == "compiler-message":
+            text = (msg.get("message") or {}).get("rendered")
+            if text:
+                rendered.append(text.rstrip())
+    return "\n".join(rendered + [(stderr or "").rstrip()]).strip()
+
 def compile_test_binary(config: dict, cwd: Path, out_dir: Path):
     """Compiles the test binary for the given cargo invocation and copies it into
-    `out_dir`. Aborts on compile failure or if no executable is created.
+    `out_dir`. Raises `CrateFailure` on compile failure or if no executable is
+    created.
     """
     print(f"compiling tests ({config["name"]}): {' '.join(config["cmd"])}",
           file=sys.stderr)
     # We need to parse the output JSON to find the name of the test binary.
-    msg_json = run_capture(
-        config["cmd"] + ["--no-run", "--message-format=json"],
-        cwd=cwd,
-        env=config.get("env"),
-    )
+    try:
+        msg_json = run_capture(
+            config["cmd"] + ["--no-run", "--message-format=json"],
+            cwd=cwd,
+            env=config.get("env"),
+        )
+    except subprocess.CalledProcessError as exc:
+        raise CrateFailure("build_failed", f"{config['name']} tests failed to compile",
+                           compiler_output(exc.stdout, exc.stderr)) from exc
     for msg in TestHarnessJSON(msg_json):
         exe = msg.get("executable")
         target = msg.get("target") or {}
@@ -331,7 +376,7 @@ def compile_test_binary(config: dict, cwd: Path, out_dir: Path):
             binary.chmod(0o755)
             return
 
-    sys.exit(f"Error: could not locate {config["name"]} test binary.")
+    raise CrateFailure("build_failed", f"could not locate the {config['name']} test binary")
 
 def miri_binary() -> str:
     """Resolve the real `miri` executable for the active toolchain."""
@@ -518,42 +563,81 @@ def process_config(
         for test_name in excluded_tests:
             print(f"- {test_name}")
 
-    src_dir = download_crate(crate, version, scratch)
+    # a raw list of execution times per crate, version, test case, and mode
+    raw_results: list[tuple] = []
+
+    def record_failure(mode: str, failure: CrateFailure) -> None:
+        """Record that `mode` produced nothing for this crate, and why."""
+        print(f"    - {mode}: {failure.status} ({failure})")
+        print_failure(mode, "(whole crate)", failure.output)
+        error = describe_failure(failure.output, src_dir, log_url)
+        raw_results.append((target, crate, version, "", mode, failure.status, None)
+                           + tuple(error.values()))
+
+    try:
+        src_dir = download_crate(crate, version, scratch)
+    except (OSError, urllib.error.URLError, tarfile.TarError) as exc:
+        src_dir = scratch
+        failure = CrateFailure("setup_failed", f"could not download {crate}@{version}: {exc}")
+        for mode in [c["name"] for c in binary_configs] + ([c["name"] for c in MIRI_CONFIGS] if miri else []):
+            record_failure(mode, failure)
+        return {"relative": [], "raw": raw_results}
+
+    # A configuration that does not compile is left out of the rest of the
+    # run; the others are still measured.
+    built = []
     for config in binary_configs:
-        compile_test_binary(config, cwd=src_dir, out_dir=scratch)
         try:
-            run(["cargo", "clean", "--quiet"], cwd=src_dir)
-        except subprocess.CalledProcessError:
-            pass
-
-    # Without Miri, list from the first compiled binary instead. Every one is
-    # built with `--cfg=miri` too, so `#[cfg_attr(miri, ignore)]` still takes
-    # effect.
-    if miri:
-        all_tests = list_tests(src_dir, ["cargo", "miri", "test", "--lib", "--"])
-    else:
-        all_tests = list_tests(src_dir, [str(scratch / binary_configs[0]["name"])])
-
-    if not all_tests:
-        sys.exit(f"Error: no tests discovered for {bench_name}.")
-    else:
-        print(f"Found {len(all_tests)} tests for {bench_name}.")
-
-    tests = [t for t in all_tests if t not in excluded_tests]
-    if not tests:
-        sys.exit(f"Error: every discovered test was excluded for {bench_name}.")
+            compile_test_binary(config, cwd=src_dir, out_dir=scratch)
+            built.append(config)
+        except CrateFailure as failure:
+            record_failure(config["name"], failure)
+        run_rc(["cargo", "clean", "--quiet"], cwd=src_dir)
 
     miri_configs = MIRI_CONFIGS if miri else []
-    if miri:
-        compile_miri_tests(src_dir)
+    try:
+        # Without Miri, list from the first compiled binary instead. Every one
+        # is built with `--cfg=miri` too, so `#[cfg_attr(miri, ignore)]` still
+        # takes effect.
+        if miri:
+            all_tests = list_tests(src_dir, ["cargo", "miri", "test", "--lib", "--"])
+        elif built:
+            all_tests = list_tests(src_dir, [str(scratch / built[0]["name"])])
+        else:
+            all_tests = []
+
+        if built or miri:
+            if not all_tests:
+                raise CrateFailure("setup_failed", f"no tests discovered for {bench_name}")
+            print(f"Found {len(all_tests)} tests for {bench_name}.")
+
+        tests = [t for t in all_tests if t not in excluded_tests]
+        if all_tests and not tests:
+            raise CrateFailure("setup_failed",
+                               f"every discovered test was excluded for {bench_name}")
+
+        if miri:
+            try:
+                compile_miri_tests(src_dir)
+            except subprocess.CalledProcessError as exc:
+                raise CrateFailure("build_failed", "tests failed to compile under Miri",
+                                   compiler_output(exc.stdout, exc.stderr)) from exc
+    except (CrateFailure, subprocess.CalledProcessError, SystemExit) as exc:
+        # Nothing about this crate can be measured, under any configuration
+        # that is still left.
+        if not isinstance(exc, CrateFailure):
+            output = getattr(exc, "stderr", None) or str(exc)
+            exc = CrateFailure("setup_failed", f"could not list tests for {bench_name}", output)
+        for mode in [c["name"] for c in built + miri_configs]:
+            record_failure(mode, exc)
+        return {"relative": [], "raw": raw_results}
+    binary_configs = built
 
     # a mapping from (config, baseline) pairs to mean execution times for each test case
     # for example, we would have `ratios[("no-op", "miri-tb")]` map to the list of
     # mean execution times for our no-op mode relative to Miri with tree borrows enabled.
     ratios: dict[tuple[str, str], list[float]] = {}
 
-    # a raw list of execution times per crate, version, test case, and mode
-    raw_results: list[tuple] = []
     # measurements that produced no timing, reported once at the end so a run
     # that quietly lost a configuration is visible in the log
     failed = 0
@@ -702,10 +786,24 @@ def main(argv: list[str]) -> int:
     all_results = {}
     with tempfile.TemporaryDirectory() as scratch_str:
         scratch = Path(scratch_str)
+        modes = [c["name"] for c in binary_configs] + (
+            [c["name"] for c in MIRI_CONFIGS] if args.miri else [])
         for cfg in configs:
-            cfg_results = process_config(cfg, args.target, scratch, miri=args.miri,
-                                         binary_configs=binary_configs,
-                                         log_url=args.log_url)
+            try:
+                cfg_results = process_config(cfg, args.target, scratch, miri=args.miri,
+                                             binary_configs=binary_configs,
+                                             log_url=args.log_url)
+            except Exception as exc:
+                # Anything process_config did not anticipate still costs only
+                # this crate its results, not the rest of the job.
+                output = traceback.format_exc()
+                print(output, file=sys.stderr)
+                error = describe_failure(output, scratch, args.log_url)
+                error["error_message"] = f"benchmarking crashed: {exc}"[:300]
+                cfg_results = {"relative": [], "raw": [
+                    (args.target, cfg.get("name"), cfg.get("version"), "", mode,
+                     "setup_failed", None) + tuple(error.values())
+                    for mode in modes]}
             all_results.setdefault("relative", [])
             all_results["relative"] += cfg_results["relative"]
             all_results.setdefault("raw", [])
@@ -719,6 +817,12 @@ def main(argv: list[str]) -> int:
             for row in all_results["raw"]:
                 csv_out.writerow(row)
 
+    failed_crates = sorted({f"{r[1]}@{r[2]} ({r[4]}: {r[5]})"
+                            for r in all_results.get("raw", []) if not r[3]})
+    if failed_crates:
+        print("Could not benchmark:")
+        for c in failed_crates:
+            print(f"- {c}")
     print(f"Results written to {args.output_json} and {args.output_csv}")
     return 0
 
