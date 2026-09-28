@@ -590,10 +590,6 @@
         "version": "2.0.1"
     },
     {
-        "name": "rustversion",
-        "version": "1.0.22"
-    },
-    {
         "name": "r-efi",
         "version": "6.0.0"
     },
