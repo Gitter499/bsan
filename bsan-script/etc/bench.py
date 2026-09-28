@@ -384,6 +384,7 @@ def process_config(
     target: str,
     scratch: Path,
     miri: bool = True,
+    binary_configs: list[dict] = ALL_BINARY_CONFIGS,
 ) -> list:
     crate = cfg.get("name")
     version = cfg.get("version")
@@ -401,19 +402,20 @@ def process_config(
             print(f"- {test_name}")
 
     src_dir = download_crate(crate, version, scratch)
-    for config in ALL_BINARY_CONFIGS:
+    for config in binary_configs:
         compile_test_binary(config, cwd=src_dir, out_dir=scratch)
         try:
             run(["cargo", "clean", "--quiet"], cwd=src_dir)
         except subprocess.CalledProcessError:
             pass
 
-    # Without Miri, list from the native binary instead. It is built with
-    # `--cfg=miri` too, so `#[cfg_attr(miri, ignore)]` still takes effect.
+    # Without Miri, list from the first compiled binary instead. Every one is
+    # built with `--cfg=miri` too, so `#[cfg_attr(miri, ignore)]` still takes
+    # effect.
     if miri:
         all_tests = list_tests(src_dir, ["cargo", "miri", "test", "--lib", "--"])
     else:
-        all_tests = list_tests(src_dir, [str(scratch / NATIVE["name"])])
+        all_tests = list_tests(src_dir, [str(scratch / binary_configs[0]["name"])])
 
     if not all_tests:
         sys.exit(f"Error: no tests discovered for {bench_name}.")
@@ -446,7 +448,7 @@ def process_config(
         per_test_means: dict[str, float] = {}
 
         # execute every natively-compiled binary and record its mean execution time
-        for config in ALL_BINARY_CONFIGS:
+        for config in binary_configs:
             binary = scratch / config["name"]
             mean, status = hyperfine_mean(f"{binary} --exact {t} --nocapture", config,
                                           env=config.get("env"))
@@ -535,6 +537,16 @@ def main(argv: list[str]) -> int:
              "native. Used where the comparison of interest is against another "
              "build of BorrowSanitizer rather than against Miri.",
     )
+    parser.add_argument(
+        "--mode",
+        action="append",
+        dest="modes",
+        metavar="NAME",
+        choices=[c["name"] for c in ALL_BINARY_CONFIGS],
+        help="Only compile and time the named configuration (repeatable). "
+             "Without `native`, no ratios are produced, only raw times. Used "
+             "for branch comparisons, which only look at `full`.",
+    )
 
     args = parser.parse_args(argv)
     for tool in ["cargo", "hyperfine"]:
@@ -543,6 +555,10 @@ def main(argv: list[str]) -> int:
     crates_json = args.crates_json
     if not crates_json.is_file():
         sys.exit(f"Error: invalid config file: {crates_json}")
+
+    binary_configs = ALL_BINARY_CONFIGS
+    if args.modes:
+        binary_configs = [c for c in ALL_BINARY_CONFIGS if c["name"] in args.modes]
 
     configs = json.loads(crates_json.read_text())
     if args.only:
@@ -556,7 +572,8 @@ def main(argv: list[str]) -> int:
     with tempfile.TemporaryDirectory() as scratch_str:
         scratch = Path(scratch_str)
         for cfg in configs:
-            cfg_results = process_config(cfg, args.target, scratch, miri=args.miri)
+            cfg_results = process_config(cfg, args.target, scratch, miri=args.miri,
+                                         binary_configs=binary_configs)
             all_results.setdefault("relative", [])
             all_results["relative"] += cfg_results["relative"]
             all_results.setdefault("raw", [])

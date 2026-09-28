@@ -159,8 +159,10 @@ def main(argv):
     def keys(rows):
         return {(tg, m) for tg, m, _, _ in rows}
     pairs = keys(branch_rows) & keys(main_rows)
-    for tg, m in sorted(keys(branch_rows) ^ keys(main_rows)):
-        print(f"warning: {m} on {tg} was only measured on one side; skipped",
+    # `main`'s published results carry every mode, and a branch run measures
+    # only the ones it is compared under, so only the reverse is worth a warning.
+    for tg, m in sorted(keys(branch_rows) - keys(main_rows)):
+        print(f"warning: {m} on {tg} was not measured on main; skipped",
               file=sys.stderr)
 
     targets = sorted({tg for tg, _ in pairs})

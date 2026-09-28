@@ -144,12 +144,16 @@ jobs:
         TARGET: ${{ matrix.target }}
         CRATE: ${{ matrix.crate }}
         MIRI: ${{ matrix.miri }}
+        MODES: ${{ matrix.modes }}
         RESULTS: ${{ steps.filename.outputs.results }}
       run: |
         flags=(--crate "$CRATE")
         if [ "$MIRI" != true ]; then
           flags+=(--no-miri)
         fi
+        for mode in $MODES; do
+          flags+=(--mode "$mode")
+        done
         python3 ./.bench-harness/bsan-script/etc/bench.py \
         "${flags[@]}" \
         ./.bench-harness/tests/benches/crates.json \
