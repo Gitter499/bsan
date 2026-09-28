@@ -87,6 +87,7 @@ CSV_HEADERS = [
     'version',
     'test_name',
     'mode',
+    'status',
     'mean_exec_time_seconds'
 ]
 
@@ -140,6 +141,20 @@ def run(
         )
         sys.exit(1)
     return proc
+
+def run_rc(
+    cmd: list[str],
+    **kwargs,
+) -> int:
+    """Run a command and return its exit code instead of aborting.
+
+    Used where a non-zero exit is a measurement result rather than an error: a
+    test that fails under one configuration is data we want to report, not a
+    reason to throw away every other measurement in the job.
+    """
+    sys.stderr.flush()
+    return subprocess.run(cmd, check=False, env=_build_env(kwargs), **kwargs).returncode
+
 def run_capture(
     cmd: list[str],
     **kwargs,
@@ -262,10 +277,18 @@ def compile_miri_tests(cwd: Path):
         cwd=cwd,
     )
 
-def run_miri_test(cwd: Path, t: str, config: dict, scratch: Path) -> float:
+def run_miri_test(cwd: Path, t: str, config: dict, scratch: Path) -> tuple[float | None, str]:
     """Time a single Miri test, excluding `cargo-miri` overhead, by capturing its
-    final `miri` invocation as a standalone script."""
+    final `miri` invocation as a standalone script.
+
+    Returns `(mean_seconds, status)` on the same terms as `hyperfine_mean`: a
+    test Miri refuses to run is reported, not fatal.
+    """
     replay = scratch / "miri-replay.sh"
+    # The wrapper rewrites this for every test. Clear it first so that a failed
+    # interception cannot leave the previous test's script in place, which we
+    # would then happily time and attribute to this one.
+    replay.unlink(missing_ok=True)
 
     override_env = { **(config.get("env") or {}) }
     override_env["MIRI"] = str(ensure_miri_wrapper(scratch))
@@ -273,10 +296,13 @@ def run_miri_test(cwd: Path, t: str, config: dict, scratch: Path) -> float:
 
     # One cargo-miri run generates the replay script for this test's final miri
     # invocation; we then time that script on its own, free of cargo overhead.
-    run_capture(["cargo", "miri", "test", "-q", "--lib", "--", "--exact", t, "--nocapture"],
-                cwd=cwd, env=override_env)
+    rc = run_rc(["cargo", "miri", "test", "-q", "--lib", "--", "--exact", t, "--nocapture"],
+                cwd=cwd, env=override_env,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if rc != 0:
+        return None, "test_failed"
     if not replay.is_file():
-        sys.exit(f"Error: failed to intercept miri invocation for test {t}.")
+        return None, "bench_failed"
     return hyperfine_mean(str(replay), config)
 
 def list_tests(cwd: Path, cmd: list[str]) -> list[str]:
@@ -308,15 +334,27 @@ def list_tests(cwd: Path, cmd: list[str]) -> list[str]:
         sys.exit(f"Invalid libtest JSON format.")
     return tests
 
-def hyperfine_mean(cmd, config: dict, **kwargs) -> float:
-    """Run hyperfine on a single command and return its mean wall time in
-    seconds. Aborts on failure"""
+def hyperfine_mean(cmd, config: dict, **kwargs) -> tuple[float | None, str]:
+    """Run hyperfine on a single command and return `(mean_seconds, status)`.
+
+    A configuration that cannot run a test is a result, not an error: the same
+    test usually runs fine under the others, and which configurations disagree
+    is exactly what the per-branch report exists to show. So nothing here
+    aborts.
+
+      success       hyperfine timed the command and reported a positive mean
+      test_failed   the command exited non-zero, so hyperfine has no timing
+      bench_failed  hyperfine ran but reported no usable mean
+
+    Only `success` carries a mean; the other two return None, which the CSV
+    writes as an empty cell.
+    """
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as out_json:
         out_path = Path(out_json.name)
     try:
         kwargs["stdout"] = subprocess.DEVNULL
         kwargs["stderr"] = subprocess.DEVNULL
-        run(
+        rc = run_rc(
             [
                 "hyperfine",
                 "--runs", str(RUNS),
@@ -328,16 +366,18 @@ def hyperfine_mean(cmd, config: dict, **kwargs) -> float:
             ],
             **kwargs
         )
-        data = json.loads(out_path.read_text())
-        mean = float(data["results"][0]["mean"])
-        return mean
+        # Without `--ignore-failure` hyperfine exits non-zero as soon as the
+        # command under test does, and writes no JSON.
+        if rc != 0:
+            return None, "test_failed"
+        try:
+            data = json.loads(out_path.read_text())
+            mean = float(data["results"][0]["mean"])
+        except (OSError, ValueError, KeyError, IndexError):
+            return None, "bench_failed"
+        return (mean, "success") if mean > 0 else (None, "bench_failed")
     finally:
         out_path.unlink(missing_ok=True)
-
-def require_positive_mean(mean: float, name: str, t: str, bench_name: str) -> None:
-    """Abort if a benchmark reported a non-positive mean execution time."""
-    if mean <= 0:
-        sys.exit(f"Reported 0s mean execution time for {name} on test {t} from {bench_name}")
 
 def process_config(
     cfg: dict,
@@ -386,41 +426,56 @@ def process_config(
     ratios: dict[tuple[str, str], list[float]] = {}
 
     # a raw list of execution times per crate, version, test case, and mode
-    raw_results: tuple[str, str, str, str, str, float] = []
+    raw_results: tuple[str, str, str, str, str, str, float] = []
+    # measurements that produced no timing, reported once at the end so a run
+    # that quietly lost a configuration is visible in the log
+    failed = 0
     for t in tests:
         row_start = (target, crate, version, t)
         print(f"  -> {t}")
-        # a mapping from each config to its mean execution time
+        # a mapping from each config to its mean execution time; a config that
+        # could not run this test has no entry
         per_test_means: dict[str, float] = {}
 
         # execute every natively-compiled binary and record its mean execution time
         for config in ALL_BINARY_CONFIGS:
             binary = scratch / config["name"]
-            mean = hyperfine_mean(f"{binary} --exact {t} --nocapture", config,
-                                  env=config.get("env"))
-            if mean <= 0:
-                sys.exit(f"""Reported 0s mean execution time for
-                          {config["name"]} on test {t} from {bench_name}""")
-            print(f"    - {config['name']}={round(mean, 8)}s")
-            per_test_means[config["name"]] = mean
-            raw_results.append(row_start + (config["name"], mean))
+            mean, status = hyperfine_mean(f"{binary} --exact {t} --nocapture", config,
+                                          env=config.get("env"))
+            if mean is None:
+                print(f"    - {config['name']}: {status}")
+                failed += 1
+            else:
+                print(f"    - {config['name']}={round(mean, 8)}s")
+                per_test_means[config["name"]] = mean
+            raw_results.append(row_start + (config["name"], status, mean))
 
-        baselines = {NATIVE["name"]: per_test_means.pop(NATIVE["name"])}
+        baselines = {}
+        if NATIVE["name"] in per_test_means:
+            baselines[NATIVE["name"]] = per_test_means.pop(NATIVE["name"])
         # execute Miri and add each configuration as a baseline for comparison
         for miri_config in MIRI_CONFIGS:
-            miri_mean = run_miri_test(src_dir, t, miri_config, scratch)
-            if miri_mean <= 0:
-                sys.exit(f"""Reported 0s mean execution time for
-                          {config["name"]} on test {t} from {bench_name}""")
-            print(f"    - {miri_config['name']}={round(miri_mean, 8)}s")
-            baselines[miri_config["name"]] = miri_mean
-            raw_results.append(row_start + (miri_config["name"], miri_mean))
+            miri_mean, status = run_miri_test(src_dir, t, miri_config, scratch)
+            if miri_mean is None:
+                print(f"    - {miri_config['name']}: {status}")
+                failed += 1
+            else:
+                print(f"    - {miri_config['name']}={round(miri_mean, 8)}s")
+                baselines[miri_config["name"]] = miri_mean
+            raw_results.append(row_start + (miri_config["name"], status, miri_mean))
 
+        # A ratio needs both of its halves measured on this test, so a config
+        # that failed here contributes no ratio and the mean below is taken over
+        # the tests that did produce one.
         for mode, mode_mean in per_test_means.items():
             for baseline, baseline_mean in baselines.items():
                 ratio = mode_mean / baseline_mean
                 ratios.setdefault((mode, baseline), []).append(ratio)
                 print(f"    - {mode} vs {baseline} = {round(ratio, 4)}x")
+
+    if failed:
+        print(f"{failed} measurement(s) produced no timing for {bench_name}; "
+              f"see the status column of the CSV.")
 
     relative_results = []
     for (mode, baseline), ratio_list in ratios.items():
