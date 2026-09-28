@@ -4,108 +4,8 @@
         "version": "1.0.0"
     },
     {
-        "name": "brotli-decompressor",
-        "version": "5.0.1",
-        "exclude": [
-            "integration_tests::test_alice1",
-            "integration_tests::test_broken_file",
-            "integration_tests::test_compressed_repeated",
-            "integration_tests::test_empty17",
-            "integration_tests::test_empty18",
-            "integration_tests::test_metablock_reset1",
-            "integration_tests::test_metablock_reset1_65536",
-            "integration_tests::test_metablock_reset3",
-            "integration_tests::test_writer_mapsdatazrh_truncated",
-            "tests::test_alice",
-            "tests::test_one_byte_copier"
-        ]
-    },
-    {
         "name": "arrayvec",
         "version": "0.7.6"
-    },
-    {
-        "name": "aho-corasick",
-        "version": "1.1.4",
-        "exclude": [
-            "tests::regression_case_insensitive_prefilter",
-            "tests::search_leftmost_first::default",
-            "tests::search_leftmost_first::dfa_default",
-            "tests::search_leftmost_first::dfa_no_byte_class",
-            "tests::search_leftmost_first::dfa_no_prefilter",
-            "tests::search_leftmost_first::dfa_start_both",
-            "tests::search_leftmost_first::dfa_start_both_no_byte_class",
-            "tests::search_leftmost_first::dfa_start_both_no_prefilter",
-            "tests::search_leftmost_first::nfa_contig_all_dense",
-            "tests::search_leftmost_first::nfa_contig_all_sparse",
-            "tests::search_leftmost_first::nfa_contig_default",
-            "tests::search_leftmost_first::nfa_contig_no_byte_class",
-            "tests::search_leftmost_first::nfa_contig_no_prefilter",
-            "tests::search_leftmost_first::nfa_default",
-            "tests::search_leftmost_first::nfa_noncontig_all_dense",
-            "tests::search_leftmost_first::nfa_noncontig_all_sparse",
-            "tests::search_leftmost_first::nfa_noncontig_no_prefilter",
-            "tests::search_leftmost_first_anchored_default",
-            "tests::search_leftmost_first_anchored_dfa_default",
-            "tests::search_leftmost_first_anchored_dfa_start_both",
-            "tests::search_leftmost_first_anchored_nfa_contig_default",
-            "tests::search_leftmost_first_anchored_nfa_noncontig_default",
-            "tests::search_leftmost_longest::default",
-            "tests::search_leftmost_longest::dfa_default",
-            "tests::search_leftmost_longest::dfa_no_byte_class",
-            "tests::search_leftmost_longest::dfa_no_prefilter",
-            "tests::search_leftmost_longest::dfa_start_both",
-            "tests::search_leftmost_longest::dfa_start_both_no_byte_class",
-            "tests::search_leftmost_longest::dfa_start_both_no_prefilter",
-            "tests::search_leftmost_longest::nfa_contig_all_dense",
-            "tests::search_leftmost_longest::nfa_contig_all_sparse",
-            "tests::search_leftmost_longest::nfa_contig_default",
-            "tests::search_leftmost_longest::nfa_contig_no_byte_class",
-            "tests::search_leftmost_longest::nfa_contig_no_prefilter",
-            "tests::search_leftmost_longest::nfa_default",
-            "tests::search_leftmost_longest::nfa_noncontig_all_dense",
-            "tests::search_leftmost_longest::nfa_noncontig_all_sparse",
-            "tests::search_leftmost_longest::nfa_noncontig_no_prefilter",
-            "tests::search_leftmost_longest_anchored_default",
-            "tests::search_leftmost_longest_anchored_dfa_default",
-            "tests::search_leftmost_longest_anchored_dfa_start_both",
-            "tests::search_leftmost_longest_anchored_nfa_contig_default",
-            "tests::search_leftmost_longest_anchored_nfa_noncontig_default",
-            "tests::search_standard_anchored_nfa_contig_default",
-            "tests::search_standard_nonoverlapping::default",
-            "tests::search_standard_nonoverlapping::dfa_default",
-            "tests::search_standard_nonoverlapping::dfa_no_byte_class",
-            "tests::search_standard_nonoverlapping::dfa_no_prefilter",
-            "tests::search_standard_nonoverlapping::dfa_start_both",
-            "tests::search_standard_nonoverlapping::dfa_start_both_no_byte_class",
-            "tests::search_standard_nonoverlapping::dfa_start_both_no_prefilter",
-            "tests::search_standard_nonoverlapping::nfa_contig_all_dense",
-            "tests::search_standard_nonoverlapping::nfa_contig_all_sparse",
-            "tests::search_standard_nonoverlapping::nfa_contig_default",
-            "tests::search_standard_nonoverlapping::nfa_contig_no_byte_class",
-            "tests::search_standard_nonoverlapping::nfa_contig_no_prefilter",
-            "tests::search_standard_nonoverlapping::nfa_default",
-            "tests::search_standard_nonoverlapping::nfa_noncontig_all_dense",
-            "tests::search_standard_nonoverlapping::nfa_noncontig_all_sparse",
-            "tests::search_standard_nonoverlapping::nfa_noncontig_no_prefilter",
-            "tests::search_standard_overlapping_default",
-            "tests::search_standard_overlapping_dfa_default",
-            "tests::search_standard_overlapping_dfa_no_byte_class",
-            "tests::search_standard_overlapping_dfa_no_prefilter",
-            "tests::search_standard_overlapping_dfa_start_both",
-            "tests::search_standard_overlapping_dfa_start_both_no_byte_class",
-            "tests::search_standard_overlapping_dfa_start_both_no_prefilter",
-            "tests::search_standard_overlapping_nfa_contig_all_dense",
-            "tests::search_standard_overlapping_nfa_contig_all_sparse",
-            "tests::search_standard_overlapping_nfa_contig_default",
-            "tests::search_standard_overlapping_nfa_contig_no_prefilter",
-            "tests::search_standard_overlapping_nfa_noncontig_default",
-            "tests::search_standard_overlapping_nfa_noncontig_no_prefilter",
-            "tests::search_standard_stream_default",
-            "tests::search_standard_stream_dfa_default",
-            "tests::search_standard_stream_nfa_contig_default",
-            "tests::search_standard_stream_nfa_noncontig_default"
-        ]
     },
     {
         "name": "alloc-no-stdlib",
@@ -267,17 +167,6 @@
         "version": "0.8.0"
     },
     {
-        "name": "dyn-clone",
-        "version": "1.0.20"
-    },
-    {
-        "name": "fixedbitset",
-        "version": "0.5.7",
-        "exclude": [
-            "clone"
-        ]
-    },
-    {
         "name": "concurrent-queue",
         "version": "2.5.0"
     },
@@ -308,21 +197,6 @@
     {
         "name": "bit-set",
         "version": "0.10.0"
-    },
-    {
-        "name": "flate2",
-        "version": "1.1.9",
-        "exclude": [
-            "deflate::tests::qc_reader",
-            "deflate::tests::qc_writer",
-            "gz::tests::qc_reader",
-            "gz::write::tests::decode_multi_writer",
-            "test_extract_failure",
-            "test_extract_success",
-            "zlib::tests::qc_reader",
-            "zlib::tests::qc_writer",
-            "zlib::tests::reset_decoder"
-        ]
     },
     {
         "name": "curve25519-dalek",
@@ -364,13 +238,6 @@
     {
         "name": "combine",
         "version": "4.6.7"
-    },
-    {
-        "name": "http",
-        "version": "1.4.1",
-        "exclude": [
-            "header::name::tests::test_invalid_name_lengths"
-        ]
     },
     {
         "name": "is-terminal",
@@ -514,27 +381,6 @@
         "version": "2.3.2"
     },
     {
-        "name": "parking_lot",
-        "version": "0.12.5",
-        "exclude": [
-            "condvar::webkit_queue_test::new_test_without_timeout_5",
-            "condvar::webkit_queue_test::one_producer_one_consumer_hundred_slots",
-            "condvar::webkit_queue_test::one_producer_one_consumer_one_slot",
-            "condvar::webkit_queue_test::one_producer_one_consumer_one_slot_timeout",
-            "condvar::webkit_queue_test::one_producer_ten_consumers_hundred_slots_notify_all",
-            "condvar::webkit_queue_test::one_producer_ten_consumers_hundred_slots_notify_one",
-            "condvar::webkit_queue_test::one_producer_ten_consumers_one_slot",
-            "condvar::webkit_queue_test::sanity_check_queue",
-            "condvar::webkit_queue_test::sanity_check_queue_timeout",
-            "condvar::webkit_queue_test::ten_producers_one_consumer_hundred_slots_notify_all",
-            "condvar::webkit_queue_test::ten_producers_one_consumer_hundred_slots_notify_one",
-            "condvar::webkit_queue_test::ten_producers_one_consumer_one_slot",
-            "condvar::webkit_queue_test::ten_producers_ten_consumers_hundred_slots_notify_all",
-            "condvar::webkit_queue_test::ten_producers_ten_consumers_hundred_slots_notify_one",
-            "condvar::webkit_queue_test::ten_producers_ten_consumers_one_slot"
-        ]
-    },
-    {
         "name": "pem-rfc7468",
         "version": "1.0.0"
     },
@@ -579,10 +425,6 @@
         ]
     },
     {
-        "name": "utf8parse",
-        "version": "0.2.2"
-    },
-    {
         "name": "subtle",
         "version": "2.6.1"
     },
@@ -601,19 +443,6 @@
     {
         "name": "siphasher",
         "version": "1.0.3"
-    },
-    {
-        "name": "twox-hash",
-        "version": "2.1.2",
-        "exclude": [
-            "xxhash32::test::hashes_with_different_offsets_are_the_same",
-            "xxhash3_128::test::streaming_241_plus_bytes",
-            "xxhash3_64::test::oneshot_129_to_240_bytes",
-            "xxhash3_64::test::streaming_241_plus_bytes",
-            "xxhash3_64::test::streaming_4_to_8_bytes",
-            "xxhash3_64::test::streaming_with_seed",
-            "xxhash64::test::hashes_with_different_offsets_are_the_same"
-        ]
     },
     {
         "name": "zeroize",
@@ -669,15 +498,6 @@
     {
         "name": "tinystr",
         "version": "0.8.3"
-    },
-    {
-        "name": "simd-adler32",
-        "version": "0.3.9",
-        "exclude": [
-            "imp::avx2::tests::random",
-            "imp::sse2::tests::random",
-            "imp::ssse3::tests::random"
-        ]
     },
     {
         "name": "spin",

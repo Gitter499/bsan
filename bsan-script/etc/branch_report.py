@@ -31,6 +31,15 @@ changed behaviour, and why, rather than only how many.
 
 When a CSV is given more than once for the same (target, crate, test, mode),
 the last row wins, so fresh `main` results listed after a cached copy replace it.
+
+Earlier runs
+    Rerunning a branch adds a line rather than replacing one, so a new commit
+    can be compared with the ones before it, and a rerun of the same commit
+    shows how far the numbers move between runs. `--previous` is the report
+    the branch's page last published; its most recent `--max-runs` runs are
+    kept, with their per-test times under `raw`, and every line is summed
+    over the tests that succeeded on `main` and in every kept run that
+    measured the crate. `dropped` compares only the newest run with `main`.
 """
 
 import argparse
@@ -55,6 +64,75 @@ COMPARABLE = "success"
 
 REQUIRED = {"target", "crate_name", "version", "test_name", "mode",
             "status", "mean_exec_time_seconds"}
+
+
+def rounded(v):
+    """Six significant figures: far finer than run-to-run noise, and it keeps
+    the stored history small."""
+    return float(f"{v:.6g}")
+
+
+def successes(rows, tg, m, crates):
+    """{crate: {test: seconds}} for the tests that succeeded with a timing."""
+    out = {}
+    for (rtg, rm, c, t), r in rows.items():
+        if rtg == tg and rm == m and t and c in crates and r["status"] == COMPARABLE:
+            v = timing(r)
+            if v is not None:
+                out.setdefault(c, {})[t] = rounded(v)
+    return out
+
+
+def load_previous(path):
+    """The runs and per-test times of the report a branch last published.
+
+    A report written before runs were kept has neither, so history starts over.
+    """
+    if path is None or not path.is_file():
+        return [], {}
+    try:
+        prev = json.loads(path.read_text())
+    except ValueError:
+        return [], {}
+    runs, raw = prev.get("runs"), prev.get("raw")
+    if not isinstance(runs, list) or not isinstance(raw, dict):
+        return [], {}
+    return [r for r in runs if r.get("key") in raw], raw
+
+
+def add_history(data, main_ok, runs, raw, tg, m):
+    """Replace one (target, mode)'s lines with one per kept run.
+
+    `main_ok` is {crate: {test: seconds}} on `main`. Each crate's point on
+    every line, main's included, is the sum over the tests that succeeded on
+    `main` and in every kept run that measured that crate; a run that did not
+    measure it has no point there.
+    """
+    per_run = {r["key"]: raw[r["key"]].get(tg, {}).get(m, {}) for r in runs}
+    latest = runs[-1]["key"]
+    history = {r["key"]: {} for r in runs}
+    main_s, tests = {}, {}
+    for crate, main_tests in main_ok.items():
+        measured = [k for k, by_crate in per_run.items() if by_crate.get(crate)]
+        if latest not in measured:
+            continue
+        common = set(main_tests)
+        for k in measured:
+            common &= set(per_run[k][crate])
+        if not common:
+            continue
+        main_s[crate] = sum(main_tests[t] for t in common)
+        for k in measured:
+            history[k][crate] = sum(per_run[k][crate][t] for t in common)
+        # `total` counts the tests the newest run and main were compared over.
+        total = data["tests"].get(crate, {}).get("total", len(common))
+        tests[crate] = {"kept": len(common), "total": total, "runs": len(measured)}
+
+    data["crates"] = sorted(main_s, key=lambda c: (main_s[c], c))
+    data["main"] = main_s
+    data["branch"] = history[latest]
+    data["history"] = history
+    data["tests"] = tests
 
 
 def mode_key(mode):
@@ -215,6 +293,14 @@ def main(argv):
                          "results on a side are listed as such.")
     ap.add_argument("--targets", type=Path,
                     help="A JSON list of {\"target\": ...} the run benchmarked.")
+    ap.add_argument("--previous", type=Path,
+                    help="The data.json the branch's page last published, whose runs "
+                         "are kept as earlier lines.")
+    ap.add_argument("--max-runs", type=int, default=5,
+                    help="How many runs, this one included, to keep (default: 5).")
+    ap.add_argument("--run-id", default="",
+                    help="Identifies this run; a report for the same run (a re-run "
+                         "attempt) replaces the earlier one instead of adding to it.")
     ap.add_argument("--repo-url", default="")
     ap.add_argument("--run-url", default="")
     args = ap.parse_args(argv)
@@ -243,15 +329,26 @@ def main(argv):
             if (tg, m) not in main_keys:
                 print(f"warning: {m} on {tg} has no results on main", file=sys.stderr)
 
+    generated = int(time.time() * 1000)
+    run = {"key": args.run_id or str(generated), "commit": args.commit,
+           "generated": generated, "runUrl": args.run_url,
+           "mainCommits": list(dict.fromkeys(c for c in args.main_commit if c))}
+    prev_runs, prev_raw = load_previous(args.previous)
+    runs = ([r for r in prev_runs if r["key"] != run["key"]] + [run])[-max(1, args.max_runs):]
+    raw = {r["key"]: prev_raw[r["key"]] for r in runs[:-1]}
+    raw[run["key"]] = {}
+
     report = {
-        "generated": int(time.time() * 1000),
+        "generated": generated,
         "branch": args.branch,
         "commit": args.commit,
         "mainCommits": list(dict.fromkeys(c for c in args.main_commit if c)),
         "repoUrl": args.repo_url,
         "runUrl": args.run_url,
         "modes": modes,
+        "runs": runs,
         "targets": {},
+        "raw": raw,
     }
     for tg in targets:
         report["targets"][tg] = {}
@@ -264,9 +361,13 @@ def main(argv):
             crates = (expected_crates if expected_crates is not None
                       else {c for c, _ in branch_side})
             main_side = {k: r for k, r in side(main_rows).items() if k[0] in crates}
-            report["targets"][tg][m] = build_mode(main_side, branch_side, crates)
+            data = build_mode(main_side, branch_side, crates)
+            raw[run["key"]].setdefault(tg, {})[m] = successes(branch_rows, tg, m, crates)
+            add_history(data, successes(main_rows, tg, m, crates), runs, raw, tg, m)
+            report["targets"][tg][m] = data
 
-    args.output.write_text(json.dumps(report, indent=2))
+    # Compact: with many crates and runs, indentation is most of the file.
+    args.output.write_text(json.dumps(report, separators=(",", ":")))
 
     for tg, by_mode in report["targets"].items():
         for m, data in by_mode.items():
@@ -277,6 +378,7 @@ def main(argv):
             ratio = f", branch/main = {tb / tm:.3f}x" if tm else ""
             print(f"{tg} {m}: {len(data['crates'])} crate(s), {kept} common test(s), "
                   f"{len(data['dropped'])} dropped ({changed} changed){ratio}")
+    print(f"{len(runs)} run(s) kept: " + ", ".join(r["commit"][:8] or r["key"] for r in runs))
     print(f"Report written to {args.output}")
     return 0
 

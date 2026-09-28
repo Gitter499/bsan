@@ -15,6 +15,7 @@ import csv
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -25,6 +26,12 @@ from pathlib import Path
 
 RUNS = 3
 WARMUP = 1
+
+# How long one run of one test may take, in seconds, before it counts as hung
+# (`timed_out`) rather than holding its CI job until GitHub kills it. Miri is
+# far slower than native execution, so it gets several times as long.
+TEST_TIMEOUT = 300
+MIRI_TIMEOUT_FACTOR = 4
 
 # Uninstrumented native execution.
 NATIVE = {
@@ -183,18 +190,49 @@ def run_capture(
     )
     return proc.stdout
 
-def run_output(cmd: list[str], **kwargs) -> str:
-    """Run a command and return its stdout and stderr, interleaved, whatever
-    its exit code. Used to see why a test failed after hyperfine has already
-    reported that it did."""
+def _text(data) -> str:
+    if data is None:
+        return ""
+    return data.decode(errors="replace") if isinstance(data, bytes) else data
+
+def run_limited(cmd: list[str], timeout: float, capture: bool = False,
+                **kwargs) -> tuple[int | None, str]:
+    """Run a command for at most `timeout` seconds and return
+    `(returncode, output)`, with None for the return code if it timed out.
+
+    The command gets its own process group, and on timeout the whole group is
+    killed: a test binary under hyperfine, or `miri` under cargo, must not
+    outlive its parent and keep a CPU busy during later measurements.
+    """
     sys.stderr.flush()
-    proc = subprocess.run(
-        cmd, check=False,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace",
-        env=_build_env(kwargs),
-        **kwargs,
-    )
-    return proc.stdout
+    env = _build_env(dict(kwargs))
+    rest = {k: v for k, v in kwargs.items() if k != "env"}
+    if capture:
+        rest.update(stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    proc = subprocess.Popen(cmd, env=env, start_new_session=True,
+                            text=True, errors="replace", **rest)
+    try:
+        out, _ = proc.communicate(timeout=timeout)
+        return proc.returncode, out or ""
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        out, _ = proc.communicate()
+        return None, out or ""
+
+def probe(cmd: list[str], timeout: float, **kwargs) -> tuple[str, str | None]:
+    """Run a test once, untimed, and return `(status, output)`.
+
+    This is the warmup run hyperfine would otherwise do, under a time limit:
+    a test that hangs is stopped here, and one that fails is caught with its
+    output, which hyperfine would discard. Output is only returned for a
+    failure: `success`, `test_failed` or `timed_out`.
+    """
+    rc, output = run_limited(cmd, timeout, capture=True, **kwargs)
+    if rc is None:
+        return "timed_out", f"timed out after {timeout:g}s\n{output}"
+    if rc != 0:
+        return "test_failed", output
+    return "success", None
 
 # `--> src/lib.rs:12:5`, as BorrowSanitizer and Miri print below an error.
 ARROW_LOCATION = re.compile(r"^\s*--> (?P<path>[^\s:][^:]*):(?P<line>\d+):(?P<col>\d+)")
@@ -208,7 +246,8 @@ REGISTRY_PATH = re.compile(
 # The standard library's source, as rustc records it.
 RUSTC_PATH = re.compile(r"^/rustc/(?P<hash>[0-9a-f]{40})/(?P<rest>.+)$")
 
-def describe_failure(output: str | None, src_dir: Path, log_url: str) -> dict:
+def describe_failure(output: str | None, src_dir: Path, log_url: str,
+                     status: str = "") -> dict:
     """Pull the first error out of a failing test's output.
 
     Returns the CSV's error fields: a one-line message, the `path:line:col` it
@@ -225,6 +264,12 @@ def describe_failure(output: str | None, src_dir: Path, log_url: str) -> dict:
     empty["log_url"] = log_url
     if not output:
         return empty
+    if status == "timed_out":
+        # Whatever a hung test printed before it was stopped is not its error;
+        # the first line says how long it was given.
+        first, _, rest = output.partition("\n")
+        tail = "\n".join(rest.splitlines()[-ERROR_DETAIL_LINES:])
+        return {**empty, "error_message": first, "error_detail": tail[:ERROR_DETAIL_CHARS]}
     lines = output.splitlines()
 
     start = message = loc = None
@@ -307,8 +352,11 @@ def download_crate(crate: str, version: str, dest_dir: Path) -> Path:
     url = f"https://crates.io/api/v1/crates/{crate}/{version}/download"
     tarball = dest_dir / f"{crate}-{version}.crate"
 
-    req = urllib.request.Request(url)
-    with urllib.request.urlopen(req) as resp, open(tarball, "wb") as out:
+    # crates.io asks clients to identify themselves, and a stalled download
+    # must fail rather than hold the job.
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "BorrowSanitizer benchmarks (https://github.com/BorrowSanitizer/bsan)"})
+    with urllib.request.urlopen(req, timeout=120) as resp, open(tarball, "wb") as out:
         shutil.copyfileobj(resp, out)
 
     with tarfile.open(tarball, "r:gz") as tf:
@@ -434,7 +482,7 @@ def compile_miri_tests(cwd: Path):
         cwd=cwd,
     )
 
-def run_miri_test(cwd: Path, t: str, config: dict, scratch: Path
+def run_miri_test(cwd: Path, t: str, config: dict, scratch: Path, timeout: float
                   ) -> tuple[float | None, str, str | None]:
     """Time a single Miri test, excluding `cargo-miri` overhead, by capturing its
     final `miri` invocation as a standalone script.
@@ -454,15 +502,15 @@ def run_miri_test(cwd: Path, t: str, config: dict, scratch: Path
 
     # One cargo-miri run generates the replay script for this test's final miri
     # invocation; we then time that script on its own, free of cargo overhead.
-    proc = subprocess.run(
+    # That run also serves as the test's warmup and its time-limited probe.
+    status, output = probe(
         ["cargo", "miri", "test", "-q", "--lib", "--", "--exact", t, "--nocapture"],
-        check=False, cwd=cwd, env=_build_env({"env": override_env}),
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
-    if proc.returncode != 0:
-        return None, "test_failed", proc.stdout
+        timeout, cwd=cwd, env=override_env)
+    if status != "success":
+        return None, status, output
     if not replay.is_file():
         return None, "bench_failed", None
-    return hyperfine_mean(str(replay), config)
+    return hyperfine_mean(str(replay), config, timeout, probed=True)
 
 def list_tests(cwd: Path, cmd: list[str]) -> list[str]:
     out = run_capture(cmd + [
@@ -493,7 +541,8 @@ def list_tests(cwd: Path, cmd: list[str]) -> list[str]:
         sys.exit(f"Invalid libtest JSON format.")
     return tests
 
-def hyperfine_mean(cmd, config: dict, **kwargs) -> tuple[float | None, str, str | None]:
+def hyperfine_mean(cmd, config: dict, timeout: float, probed: bool = False,
+                   **kwargs) -> tuple[float | None, str, str | None]:
     """Run hyperfine on a single command and return
     `(mean_seconds, status, output)`.
 
@@ -504,33 +553,47 @@ def hyperfine_mean(cmd, config: dict, **kwargs) -> tuple[float | None, str, str 
 
       success       hyperfine timed the command and reported a positive mean
       test_failed   the command exited non-zero, so hyperfine has no timing
+      timed_out     one run took longer than `timeout` seconds
       bench_failed  hyperfine ran but reported no usable mean
 
-    Only `success` carries a mean; the other two return None, which the CSV
-    writes as an empty cell. Only `test_failed` carries output: hyperfine
-    discards it, so the command is run once more to see why it failed.
+    Only `success` carries a mean; the rest return None, which the CSV writes
+    as an empty cell. The first run is a `probe`, standing in for hyperfine's
+    warmup, which catches a failing or hanging test with its output; skip it
+    with `probed` when the caller has already run the test once.
     """
+    warmup = WARMUP
+    if not probed:
+        status, output = probe(shlex.split(cmd), timeout, **kwargs)
+        if status != "success":
+            return None, status, output
+        warmup = max(0, WARMUP - 1)
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as out_json:
         out_path = Path(out_json.name)
     try:
-        rc = run_rc(
+        # A test that passed its probe can still hang on a later run.
+        limit = timeout * (RUNS + warmup) + 60
+        rc, _ = run_limited(
             [
                 "hyperfine",
                 "--runs", str(RUNS),
-                "--warmup", str(WARMUP),
+                "--warmup", str(warmup),
                 "--shell=none",
                 "--export-json", str(out_path),
                 "--show-output",
                 cmd,
             ],
+            limit,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             **kwargs
         )
+        if rc is None:
+            return None, "timed_out", f"timed out after {limit:g}s while being timed"
         # Without `--ignore-failure` hyperfine exits non-zero as soon as the
-        # command under test does, and writes no JSON.
+        # command under test does, and writes no JSON. The probe passed, so
+        # this one is flaky; there is no output to show for it.
         if rc != 0:
-            return None, "test_failed", run_output(shlex.split(cmd), **kwargs)
+            return None, "test_failed", "passed once, then failed while being timed"
         try:
             data = json.loads(out_path.read_text())
             mean = float(data["results"][0]["mean"])
@@ -547,6 +610,7 @@ def process_config(
     miri: bool = True,
     binary_configs: list[dict] = ALL_BINARY_CONFIGS,
     log_url: str = "",
+    timeout: float = TEST_TIMEOUT,
 ) -> list:
     crate = cfg.get("name")
     version = cfg.get("version")
@@ -652,7 +716,7 @@ def process_config(
         for config in binary_configs:
             binary = scratch / config["name"]
             mean, status, output = hyperfine_mean(f"{binary} --exact {t} --nocapture",
-                                                  config, env=config.get("env"))
+                                                  config, timeout, env=config.get("env"))
             if mean is None:
                 print(f"    - {config['name']}: {status}")
                 failed += 1
@@ -660,7 +724,7 @@ def process_config(
                 print(f"    - {config['name']}={round(mean, 8)}s")
                 per_test_means[config["name"]] = mean
             print_failure(config["name"], t, output)
-            error = describe_failure(output, src_dir, log_url)
+            error = describe_failure(output, src_dir, log_url, status)
             raw_results.append(row_start + (config["name"], status, mean)
                                + tuple(error.values()))
 
@@ -669,7 +733,8 @@ def process_config(
             baselines[NATIVE["name"]] = per_test_means.pop(NATIVE["name"])
         # execute Miri and add each configuration as a baseline for comparison
         for miri_config in miri_configs:
-            miri_mean, status, output = run_miri_test(src_dir, t, miri_config, scratch)
+            miri_mean, status, output = run_miri_test(src_dir, t, miri_config, scratch,
+                                                      timeout * MIRI_TIMEOUT_FACTOR)
             if miri_mean is None:
                 print(f"    - {miri_config['name']}: {status}")
                 failed += 1
@@ -677,7 +742,7 @@ def process_config(
                 print(f"    - {miri_config['name']}={round(miri_mean, 8)}s")
                 baselines[miri_config["name"]] = miri_mean
             print_failure(miri_config["name"], t, output)
-            error = describe_failure(output, src_dir, log_url)
+            error = describe_failure(output, src_dir, log_url, status)
             raw_results.append(row_start + (miri_config["name"], status, miri_mean)
                                + tuple(error.values()))
 
@@ -718,6 +783,10 @@ def process_config(
     return all_results
 
 def main(argv: list[str]) -> int:
+    # In CI stdout is a pipe, which Python block-buffers: progress would reach
+    # the log kilobytes late, out of order with stderr, and a job that seems to
+    # stop after some line has usually gone on well past it.
+    sys.stdout.reconfigure(line_buffering=True)
     parser = argparse.ArgumentParser(
         description="Benchmark relative execution time",
         usage=(
@@ -756,6 +825,15 @@ def main(argv: list[str]) -> int:
     )
 
     parser.add_argument(
+        "--test-timeout",
+        type=float,
+        default=TEST_TIMEOUT,
+        metavar="SECONDS",
+        help=f"How long one run of a test may take before it is stopped and "
+             f"recorded as timed_out (default: {TEST_TIMEOUT}; Miri gets "
+             f"{MIRI_TIMEOUT_FACTOR}x as long).",
+    )
+    parser.add_argument(
         "--log-url",
         default="",
         metavar="URL",
@@ -792,7 +870,8 @@ def main(argv: list[str]) -> int:
             try:
                 cfg_results = process_config(cfg, args.target, scratch, miri=args.miri,
                                              binary_configs=binary_configs,
-                                             log_url=args.log_url)
+                                             log_url=args.log_url,
+                                             timeout=args.test_timeout)
             except Exception as exc:
                 # Anything process_config did not anticipate still costs only
                 # this crate its results, not the rest of the job.
