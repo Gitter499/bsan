@@ -7,6 +7,7 @@
 # * A CSV file listing the mean execution times of each mode, including
 #   both the baselines and tested configurations.
 import argparse
+import re
 import statistics
 import json
 import csv
@@ -88,8 +89,17 @@ CSV_HEADERS = [
     'test_name',
     'mode',
     'status',
-    'mean_exec_time_seconds'
+    'mean_exec_time_seconds',
+    # Filled in only for `test_failed`; see `describe_failure`.
+    'error_message',
+    'error_location',
+    'log_url',
+    'error_detail',
 ]
+
+# How much of a failing test's output, from the error onward, is kept.
+ERROR_DETAIL_LINES = 40
+ERROR_DETAIL_CHARS = 4000
 
 class TestHarnessJSON:
     def __init__(self, txt):
@@ -170,6 +180,108 @@ def run_capture(
         **kwargs,
     )
     return proc.stdout
+
+def run_output(cmd: list[str], **kwargs) -> str:
+    """Run a command and return its stdout and stderr, interleaved, whatever
+    its exit code. Used to see why a test failed after hyperfine has already
+    reported that it did."""
+    sys.stderr.flush()
+    proc = subprocess.run(
+        cmd, check=False,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace",
+        env=_build_env(kwargs),
+        **kwargs,
+    )
+    return proc.stdout
+
+# `--> src/lib.rs:12:5`, as BorrowSanitizer and Miri print below an error.
+ARROW_LOCATION = re.compile(r"^\s*--> (?P<path>[^\s:][^:]*):(?P<line>\d+):(?P<col>\d+)")
+# `thread 'x' panicked at src/lib.rs:12:5:`, with the message on the next line.
+PANIC_LOCATION = re.compile(r"panicked at (?P<path>[^\s:][^:]*):(?P<line>\d+):(?P<col>\d+):?")
+# A dependency's source, as cargo unpacks it from a registry.
+REGISTRY_PATH = re.compile(
+    r"/registry/src/[^/]+/(?P<name>[A-Za-z0-9_-]+?)-(?P<version>\d[^/]*)/(?P<rest>.+)$")
+# The standard library's source, as rustc records it.
+RUSTC_PATH = re.compile(r"^/rustc/(?P<hash>[0-9a-f]{40})/(?P<rest>.+)$")
+
+def describe_failure(output: str | None, src_dir: Path, log_url: str) -> dict:
+    """Pull the first error out of a failing test's output.
+
+    Returns the CSV's error fields: a one-line message, the `path:line:col` it
+    points at (relative to the crate, when it is in the crate), a link to the
+    CI log the full output was printed to (see `print_failure`), and the output
+    from the error onward. Any of them may be empty: a test can fail without
+    printing a location, or without printing at all.
+
+    `output` is None for anything but a failed test, which has no error.
+    """
+    empty = {"error_message": "", "error_location": "", "log_url": "", "error_detail": ""}
+    if output is None:
+        return empty
+    empty["log_url"] = log_url
+    if not output:
+        return empty
+    lines = output.splitlines()
+
+    start = message = loc = None
+    # A sanitizer report is the more specific finding: the test harness only
+    # adds a generic panic or abort after it.
+    for i, text in enumerate(lines):
+        if "Undefined Behavior" in text:
+            start, message = i, text.strip()
+            for later in lines[i + 1:]:
+                if m := ARROW_LOCATION.match(later):
+                    loc = m
+                    break
+            break
+    if start is None:
+        for i, text in enumerate(lines):
+            if m := PANIC_LOCATION.search(text):
+                start, loc = i, m
+                following = lines[i + 1].strip() if i + 1 < len(lines) else ""
+                message = following or text.strip()
+                break
+    if start is None:
+        # Nothing recognisable, e.g. a crash with no report: keep the end of
+        # the output, which is where the reason usually is.
+        nonblank = [i for i, text in enumerate(lines) if text.strip()]
+        if not nonblank:
+            return empty
+        start = max(0, nonblank[-1] - ERROR_DETAIL_LINES + 1)
+        message = lines[nonblank[-1]].strip()
+
+    detail = "\n".join(lines[start:start + ERROR_DETAIL_LINES])[:ERROR_DETAIL_CHARS]
+    result = {**empty, "error_message": message[:300], "error_detail": detail}
+    if loc:
+        path = loc["path"]
+        root = str(src_dir) + "/"
+        # Show a path the way someone would look it up, not where it happened
+        # to be unpacked on the runner.
+        if path.startswith(root):
+            shown = path[len(root):]
+        elif m := REGISTRY_PATH.search(path):
+            shown = f"{m['name']}-{m['version']}/{m['rest']}"
+        elif m := RUSTC_PATH.match(path):
+            shown = m["rest"]
+        else:
+            shown = path
+        result["error_location"] = f"{shown}:{loc['line']}:{loc['col']}"
+    return result
+
+def print_failure(mode: str, test: str, output: str | None) -> None:
+    """Print a failed test's output to the log, which `log_url` links to.
+
+    In GitHub Actions each failure is a collapsed group, titled so that it can
+    be found by searching the log for the test's name.
+    """
+    if output is None:
+        return
+    actions = os.environ.get("GITHUB_ACTIONS") == "true"
+    print(f"::group::FAILED {mode}: {test}" if actions else f"FAILED {mode}: {test}")
+    print(output.rstrip() or "(no output)")
+    if actions:
+        print("::endgroup::")
+    sys.stdout.flush()
 
 def require_tool(name: str) -> None:
     if shutil.which(name) is None:
@@ -277,12 +389,13 @@ def compile_miri_tests(cwd: Path):
         cwd=cwd,
     )
 
-def run_miri_test(cwd: Path, t: str, config: dict, scratch: Path) -> tuple[float | None, str]:
+def run_miri_test(cwd: Path, t: str, config: dict, scratch: Path
+                  ) -> tuple[float | None, str, str | None]:
     """Time a single Miri test, excluding `cargo-miri` overhead, by capturing its
     final `miri` invocation as a standalone script.
 
-    Returns `(mean_seconds, status)` on the same terms as `hyperfine_mean`: a
-    test Miri refuses to run is reported, not fatal.
+    Returns `(mean_seconds, status, output)` on the same terms as
+    `hyperfine_mean`: a test Miri refuses to run is reported, not fatal.
     """
     replay = scratch / "miri-replay.sh"
     # The wrapper rewrites this for every test. Clear it first so that a failed
@@ -296,13 +409,14 @@ def run_miri_test(cwd: Path, t: str, config: dict, scratch: Path) -> tuple[float
 
     # One cargo-miri run generates the replay script for this test's final miri
     # invocation; we then time that script on its own, free of cargo overhead.
-    rc = run_rc(["cargo", "miri", "test", "-q", "--lib", "--", "--exact", t, "--nocapture"],
-                cwd=cwd, env=override_env,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if rc != 0:
-        return None, "test_failed"
+    proc = subprocess.run(
+        ["cargo", "miri", "test", "-q", "--lib", "--", "--exact", t, "--nocapture"],
+        check=False, cwd=cwd, env=_build_env({"env": override_env}),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+    if proc.returncode != 0:
+        return None, "test_failed", proc.stdout
     if not replay.is_file():
-        return None, "bench_failed"
+        return None, "bench_failed", None
     return hyperfine_mean(str(replay), config)
 
 def list_tests(cwd: Path, cmd: list[str]) -> list[str]:
@@ -334,8 +448,9 @@ def list_tests(cwd: Path, cmd: list[str]) -> list[str]:
         sys.exit(f"Invalid libtest JSON format.")
     return tests
 
-def hyperfine_mean(cmd, config: dict, **kwargs) -> tuple[float | None, str]:
-    """Run hyperfine on a single command and return `(mean_seconds, status)`.
+def hyperfine_mean(cmd, config: dict, **kwargs) -> tuple[float | None, str, str | None]:
+    """Run hyperfine on a single command and return
+    `(mean_seconds, status, output)`.
 
     A configuration that cannot run a test is a result, not an error: the same
     test usually runs fine under the others, and which configurations disagree
@@ -347,13 +462,12 @@ def hyperfine_mean(cmd, config: dict, **kwargs) -> tuple[float | None, str]:
       bench_failed  hyperfine ran but reported no usable mean
 
     Only `success` carries a mean; the other two return None, which the CSV
-    writes as an empty cell.
+    writes as an empty cell. Only `test_failed` carries output: hyperfine
+    discards it, so the command is run once more to see why it failed.
     """
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as out_json:
         out_path = Path(out_json.name)
     try:
-        kwargs["stdout"] = subprocess.DEVNULL
-        kwargs["stderr"] = subprocess.DEVNULL
         rc = run_rc(
             [
                 "hyperfine",
@@ -364,18 +478,20 @@ def hyperfine_mean(cmd, config: dict, **kwargs) -> tuple[float | None, str]:
                 "--show-output",
                 cmd,
             ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             **kwargs
         )
         # Without `--ignore-failure` hyperfine exits non-zero as soon as the
         # command under test does, and writes no JSON.
         if rc != 0:
-            return None, "test_failed"
+            return None, "test_failed", run_output(shlex.split(cmd), **kwargs)
         try:
             data = json.loads(out_path.read_text())
             mean = float(data["results"][0]["mean"])
         except (OSError, ValueError, KeyError, IndexError):
-            return None, "bench_failed"
-        return (mean, "success") if mean > 0 else (None, "bench_failed")
+            return None, "bench_failed", None
+        return (mean, "success", None) if mean > 0 else (None, "bench_failed", None)
     finally:
         out_path.unlink(missing_ok=True)
 
@@ -385,6 +501,7 @@ def process_config(
     scratch: Path,
     miri: bool = True,
     binary_configs: list[dict] = ALL_BINARY_CONFIGS,
+    log_url: str = "",
 ) -> list:
     crate = cfg.get("name")
     version = cfg.get("version")
@@ -436,7 +553,7 @@ def process_config(
     ratios: dict[tuple[str, str], list[float]] = {}
 
     # a raw list of execution times per crate, version, test case, and mode
-    raw_results: tuple[str, str, str, str, str, str, float] = []
+    raw_results: list[tuple] = []
     # measurements that produced no timing, reported once at the end so a run
     # that quietly lost a configuration is visible in the log
     failed = 0
@@ -450,29 +567,35 @@ def process_config(
         # execute every natively-compiled binary and record its mean execution time
         for config in binary_configs:
             binary = scratch / config["name"]
-            mean, status = hyperfine_mean(f"{binary} --exact {t} --nocapture", config,
-                                          env=config.get("env"))
+            mean, status, output = hyperfine_mean(f"{binary} --exact {t} --nocapture",
+                                                  config, env=config.get("env"))
             if mean is None:
                 print(f"    - {config['name']}: {status}")
                 failed += 1
             else:
                 print(f"    - {config['name']}={round(mean, 8)}s")
                 per_test_means[config["name"]] = mean
-            raw_results.append(row_start + (config["name"], status, mean))
+            print_failure(config["name"], t, output)
+            error = describe_failure(output, src_dir, log_url)
+            raw_results.append(row_start + (config["name"], status, mean)
+                               + tuple(error.values()))
 
         baselines = {}
         if NATIVE["name"] in per_test_means:
             baselines[NATIVE["name"]] = per_test_means.pop(NATIVE["name"])
         # execute Miri and add each configuration as a baseline for comparison
         for miri_config in miri_configs:
-            miri_mean, status = run_miri_test(src_dir, t, miri_config, scratch)
+            miri_mean, status, output = run_miri_test(src_dir, t, miri_config, scratch)
             if miri_mean is None:
                 print(f"    - {miri_config['name']}: {status}")
                 failed += 1
             else:
                 print(f"    - {miri_config['name']}={round(miri_mean, 8)}s")
                 baselines[miri_config["name"]] = miri_mean
-            raw_results.append(row_start + (miri_config["name"], status, miri_mean))
+            print_failure(miri_config["name"], t, output)
+            error = describe_failure(output, src_dir, log_url)
+            raw_results.append(row_start + (miri_config["name"], status, miri_mean)
+                               + tuple(error.values()))
 
         # A ratio needs both of its halves measured on this test, so a config
         # that failed here contributes no ratio and the mean below is taken over
@@ -548,6 +671,14 @@ def main(argv: list[str]) -> int:
              "for branch comparisons, which only look at `full`.",
     )
 
+    parser.add_argument(
+        "--log-url",
+        default="",
+        metavar="URL",
+        help="Where this run's log can be read, e.g. its CI job. Recorded "
+             "against every failed test, whose output is printed to the log.",
+    )
+
     args = parser.parse_args(argv)
     for tool in ["cargo", "hyperfine"]:
         require_tool(tool)
@@ -573,7 +704,8 @@ def main(argv: list[str]) -> int:
         scratch = Path(scratch_str)
         for cfg in configs:
             cfg_results = process_config(cfg, args.target, scratch, miri=args.miri,
-                                         binary_configs=binary_configs)
+                                         binary_configs=binary_configs,
+                                         log_url=args.log_url)
             all_results.setdefault("relative", [])
             all_results["relative"] += cfg_results["relative"]
             all_results.setdefault("raw", [])

@@ -25,8 +25,9 @@ No calibration
     of means.
 
 Everything left out of the common set is reported in `dropped` with its status
-on each side, so the page can show which tests changed behaviour rather than
-only how many.
+on each side, and for each failing side the error bench.py found in its output
+and a link to the CI log holding that output, so the page can show which tests
+changed behaviour, and why, rather than only how many.
 
 When a CSV is given more than once for the same (target, crate, test, mode),
 the last row wins, so fresh `main` results listed after a cached copy replace it.
@@ -87,6 +88,20 @@ def status(row):
     return row["status"] if row is not None else "not run"
 
 
+def error(row):
+    """The error bench.py extracted from a failing test, or None.
+
+    Results published before bench.py recorded errors have no error columns.
+    """
+    if row is None or row.get("status") == COMPARABLE:
+        return None
+    fields = {"message": row.get("error_message") or "",
+              "location": row.get("error_location") or "",
+              "url": row.get("log_url") or "",
+              "detail": row.get("error_detail") or ""}
+    return fields if any(fields.values()) else None
+
+
 def build_mode(main_rows, branch_rows):
     """Compare one (target, mode): {(crate, test): row} on each side."""
     seconds = {"main": {}, "branch": {}}
@@ -114,7 +129,8 @@ def build_mode(main_rows, branch_rows):
         else:
             reason = f"{sm} on both"
         dropped.append({"crate": crate, "test": test, "reason": reason,
-                        "main": sm, "branch": sb})
+                        "main": sm, "branch": sb,
+                        "errors": {"main": error(m), "branch": error(b)}})
 
     # A crate with no comparable test has no point on either line.
     crates = sorted((c for c in counts if counts[c]["kept"] > 0),

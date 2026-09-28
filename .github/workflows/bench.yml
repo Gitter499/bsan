@@ -139,15 +139,40 @@ jobs:
         TARGET: ${{ matrix.target }}
         CRATE: ${{ matrix.crate }}
       run: echo "results=results_${LABEL}_${TARGET}_${CRATE}" >> "$GITHUB_OUTPUT"
+    # A failing test's output is printed to this job's log, and the report
+    # links each failure here.
+    - name: Resolve log URL
+      id: log
+      env:
+        GH_TOKEN: ${{ github.token }}
+        CHECK_RUN_ID: ${{ job.check_run_id }}
+        JOB_NAME: "${{ matrix.label }}: ${{ matrix.crate }} (${{ matrix.target }})"
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        # A job's ID is its check run's ID. Older runners do not expose it, so
+        # fall back to finding this job by name, and then to the whole run.
+        id="$CHECK_RUN_ID"
+        if [ -z "$id" ]; then
+          id=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
+            | python3 -c 'import json, os, sys; print(next((str(j["id"]) for j in json.load(sys.stdin)["jobs"] if j["name"] == os.environ["JOB_NAME"]), ""))' \
+            || true)
+        fi
+        if [ -n "$id" ]; then
+          echo "url=$RUN_URL/job/$id" >> "$GITHUB_OUTPUT"
+        else
+          echo "url=$RUN_URL" >> "$GITHUB_OUTPUT"
+        fi
     - name: Benchmarks
       env:
         TARGET: ${{ matrix.target }}
         CRATE: ${{ matrix.crate }}
         MIRI: ${{ matrix.miri }}
         MODES: ${{ matrix.modes }}
+        LOG_URL: ${{ steps.log.outputs.url }}
         RESULTS: ${{ steps.filename.outputs.results }}
       run: |
-        flags=(--crate "$CRATE")
+        flags=(--crate "$CRATE" --log-url "$LOG_URL")
         if [ "$MIRI" != true ]; then
           flags+=(--no-miri)
         fi
