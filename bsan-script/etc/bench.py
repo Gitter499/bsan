@@ -383,6 +383,7 @@ def process_config(
     cfg: dict,
     target: str,
     scratch: Path,
+    miri: bool = True,
 ) -> list:
     crate = cfg.get("name")
     version = cfg.get("version")
@@ -407,7 +408,12 @@ def process_config(
         except subprocess.CalledProcessError:
             pass
 
-    all_tests = list_tests(src_dir, ["cargo", "miri", "test", "--lib", "--"])
+    # Without Miri, list from the native binary instead. It is built with
+    # `--cfg=miri` too, so `#[cfg_attr(miri, ignore)]` still takes effect.
+    if miri:
+        all_tests = list_tests(src_dir, ["cargo", "miri", "test", "--lib", "--"])
+    else:
+        all_tests = list_tests(src_dir, [str(scratch / NATIVE["name"])])
 
     if not all_tests:
         sys.exit(f"Error: no tests discovered for {bench_name}.")
@@ -418,7 +424,9 @@ def process_config(
     if not tests:
         sys.exit(f"Error: every discovered test was excluded for {bench_name}.")
 
-    compile_miri_tests(src_dir)
+    miri_configs = MIRI_CONFIGS if miri else []
+    if miri:
+        compile_miri_tests(src_dir)
 
     # a mapping from (config, baseline) pairs to mean execution times for each test case
     # for example, we would have `ratios[("no-op", "miri-tb")]` map to the list of
@@ -454,7 +462,7 @@ def process_config(
         if NATIVE["name"] in per_test_means:
             baselines[NATIVE["name"]] = per_test_means.pop(NATIVE["name"])
         # execute Miri and add each configuration as a baseline for comparison
-        for miri_config in MIRI_CONFIGS:
+        for miri_config in miri_configs:
             miri_mean, status = run_miri_test(src_dir, t, miri_config, scratch)
             if miri_mean is None:
                 print(f"    - {miri_config['name']}: {status}")
@@ -519,6 +527,14 @@ def main(argv: list[str]) -> int:
         help="Only benchmark the named crate from <crates> (repeatable). "
              "Used to shard the benchmark suite one crate per CI job.",
     )
+    parser.add_argument(
+        "--no-miri",
+        action="store_false",
+        dest="miri",
+        help="Skip the Miri configurations. Ratios are then only relative to "
+             "native. Used where the comparison of interest is against another "
+             "build of BorrowSanitizer rather than against Miri.",
+    )
 
     args = parser.parse_args(argv)
     for tool in ["cargo", "hyperfine"]:
@@ -540,7 +556,7 @@ def main(argv: list[str]) -> int:
     with tempfile.TemporaryDirectory() as scratch_str:
         scratch = Path(scratch_str)
         for cfg in configs:
-            cfg_results = process_config(cfg, args.target, scratch)
+            cfg_results = process_config(cfg, args.target, scratch, miri=args.miri)
             all_results.setdefault("relative", [])
             all_results["relative"] += cfg_results["relative"]
             all_results.setdefault("raw", [])
