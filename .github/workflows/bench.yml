@@ -107,6 +107,10 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.github_token }}
+    # Steps in a container job default to `sh`, not bash.
+    defaults:
+      run:
+        shell: bash
     name: "${{ matrix.label }}: ${{ matrix.crate }} (${{ matrix.target }})"
     steps:
     # The BorrowSanitizer under test: the branch, or `main` for the baseline.
