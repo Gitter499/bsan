@@ -3,9 +3,10 @@ name: Branch benchmarks
 # under branches/ on gh-pages. `main`'s own benchmarks, and the ratio-over-time
 # dashboard at the site root, are bench.yml's; nothing here touches them.
 #
-# Runs on a pull request once it has the latest `main` merged into it, so that
-# the only difference being measured is the PR's own, and leaves a comment on
-# the PR with a link and a summary. It can also be run by hand on any branch.
+# Runs on a pull request that is ready for review (never a draft) once it has
+# the latest `main` merged into it, so that the only difference being measured
+# is the PR's own, and leaves a comment on the PR with a link and a summary. It
+# can also be run by hand on any branch.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -47,11 +48,13 @@ jobs:
   # See bench_plan.py for the plan.
   setup:
     name: Plan runs
-    # A pull request from a fork gets a read-only token, so its run could
-    # neither publish nor comment; `main` has bench.yml.
+    # Only a pull request that is ready for review; marking a draft ready runs
+    # it. A pull request from a fork gets a read-only token, so its run could
+    # neither publish nor comment. `main` has bench.yml.
     if: >-
       ${{ (github.event_name != 'pull_request'
-           || github.event.pull_request.head.repo.full_name == github.repository)
+           || (!github.event.pull_request.draft
+               && github.event.pull_request.head.repo.full_name == github.repository))
           && github.ref != 'refs/heads/main' }}
     runs-on: ubuntu-latest
     outputs:
