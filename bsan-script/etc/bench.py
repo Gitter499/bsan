@@ -142,25 +142,6 @@ def _build_env(kwargs: dict) -> dict:
             env[key] = value
     return env
 
-def run(
-    cmd: list[str],
-    **kwargs,
-) -> subprocess.CompletedProcess:
-    """Run a command, raising CalledProcessError on non-zero exit.
-
-    The command inherits the current environment.
-    """
-    sys.stderr.flush()
-    try:
-        proc = subprocess.run(cmd, check=True, env=_build_env(kwargs), **kwargs)
-    except subprocess.CalledProcessError as exc:
-        print(
-            f"command failed with exit code {exc.returncode}: {shlex.join(cmd)}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    return proc
-
 def run_rc(
     cmd: list[str],
     **kwargs,
@@ -189,11 +170,6 @@ def run_capture(
         **kwargs,
     )
     return proc.stdout
-
-def _text(data) -> str:
-    if data is None:
-        return ""
-    return data.decode(errors="replace") if isinstance(data, bytes) else data
 
 def run_limited(cmd: list[str], timeout: float, capture: bool = False,
                 **kwargs) -> tuple[int | None, str]:

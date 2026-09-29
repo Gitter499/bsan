@@ -24,7 +24,7 @@ RUN --mount=type=bind,target=/bsan,rw \
     && ./xb install \
     && rm -rf /root/.cargo/registry /root/.cargo/git
 
-# cargo-bsan and Miri each build an instrumented standard library on first use
-# and cache it; build them here so every job does not build its own.
-# Best-effort: a job whose cache does not match simply builds its own.
-RUN (cargo bsan setup || true) && (cargo miri setup || true)
+# cargo-bsan builds an instrumented standard library on first use and caches
+# it; build it here so every job does not build its own. Best-effort: a job
+# whose cache does not match simply builds its own.
+RUN cargo bsan setup || true

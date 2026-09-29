@@ -50,15 +50,13 @@ import sys
 import time
 from pathlib import Path
 
-# Mode order in the page's selector. `full` is the default selection.
-MODE_ORDER = ["full", "full-no-wildcard", "no-op", "native"]
-
-# Modes that do not measure BorrowSanitizer, so comparing them across two of its
-# builds says nothing. `main`'s cached results still carry Miri.
-IGNORED_MODES = {"miri-tb"}
-
 # Marks the PR comment this report writes, so a later run edits it in place.
 COMMENT_MARKER = "<!-- bsan-branch-benchmarks -->"
+
+# What the baseline is called in text meant to be read: the page's reasons and
+# the PR comment. The data always calls that side "main", which it usually is;
+# set by --baseline-name.
+BASELINE = "main"
 
 # The test name a whole-crate entry is listed under.
 WHOLE_CRATE = "(whole crate)"
@@ -154,13 +152,13 @@ def write_summary(path, report, page_url):
     """
     branch = report["branch"] or "branch"
     commit = (report["commit"] or "")[:8]
-    mains = ", ".join(f"`{c[:8]}`" for c in report["mainCommits"]) or "unknown"
+    main_commit = f"`{report['mainCommit'][:8]}`" if report["mainCommit"] else "unknown"
     mode = "full" if "full" in report["modes"] else (report["modes"] or ["?"])[0]
     out = [COMMENT_MARKER,
            f"### Benchmarks for `{branch}`",
            "",
            f"[Dashboard]({page_url}) · [workflow run]({report['runUrl']}) · "
-           f"`{commit}` against main {mains}, under `{mode}`.",
+           f"`{commit}` against {BASELINE} {main_commit}, under `{mode}`.",
            ""]
     for tg in sorted(report["targets"]):
         data = report["targets"][tg].get(mode)
@@ -169,23 +167,19 @@ def write_summary(path, report, page_url):
         common = [c for c in (data or {}).get("crates", [])
                   if data["main"].get(c, 0) > 0 and data["branch"].get(c, 0) > 0]
         if not common:
-            out += ["No crate has a test that succeeded on both main and the branch.", ""]
+            out += [f"No crate has a test that succeeded on both {BASELINE} and the branch.", ""]
             continue
         out += ["| Config | Mean (s) | Geomean (s) |",
                 "| ------ | -------- | ----------- |"]
-        for name, side in (("main", "main"), (branch, "branch")):
+        for name, side in ((BASELINE, "main"), (branch, "branch")):
             mean, geo = mean_geomean([data[side][c] for c in common])
             out.append(f"| {name} | {mean:.3f} | {geo:.3f} |")
         changed = sum(1 for d in data["dropped"] if d["reason"] == "changed")
         note = f"Over {len(common)} crate(s)."
         if changed:
-            note += f" {changed} test(s) have a different result than on main; see the dashboard."
+            note += f" {changed} test(s) have a different result than on {BASELINE}; see the dashboard."
         out += ["", note, ""]
     Path(path).write_text("\n".join(out))
-
-
-def mode_key(mode):
-    return (MODE_ORDER.index(mode) if mode in MODE_ORDER else len(MODE_ORDER), mode)
 
 
 def read_rows(paths):
@@ -204,8 +198,6 @@ def read_rows(paths):
                 sys.exit(f"Error: {path} is missing column(s): "
                          f"{', '.join(sorted(missing))}")
             for row in reader:
-                if row["mode"] in IGNORED_MODES:
-                    continue
                 crate = f"{row['crate_name']}@{row['version']}"
                 rows[(row["target"], row["mode"], crate, row["test_name"] or "")] = row
     return rows
@@ -261,7 +253,7 @@ def compare_crate(crate, main_tests, branch_tests, seconds, counts, dropped):
             return "not run", None
         (sm, em), (sb, eb) = side(main_whole, main_tests), side(branch_whole, branch_tests)
         if sm == "not run" or sb == "not run":
-            missing = [n for n, st in (("main", sm), ("branch", sb)) if st == "not run"]
+            missing = [n for n, st in ((BASELINE, sm), ("branch", sb)) if st == "not run"]
             reason = f"no results on {' or '.join(missing)}"
         elif sm != sb:
             reason = "changed"
@@ -286,7 +278,7 @@ def compare_crate(crate, main_tests, branch_tests, seconds, counts, dropped):
                 continue
             reason = "success without a timing"
         elif sm == "not run" or sb == "not run":
-            reason = f"not run on {'main' if sm == 'not run' else 'branch'}"
+            reason = f"not run on {BASELINE if sm == 'not run' else 'branch'}"
         elif sm != sb:
             reason = "changed"
         else:
@@ -334,9 +326,8 @@ def main(argv):
     ap.add_argument("--main-csv", type=Path, nargs="*", default=[])
     ap.add_argument("--branch", default="")
     ap.add_argument("--commit", default="")
-    ap.add_argument("--main-commit", action="append", default=[],
-                    help="A `main` commit the baseline was measured at (repeatable; "
-                         "more than one when cached and fresh results are mixed).")
+    ap.add_argument("--main-commit", default="",
+                    help="The commit the baseline was measured at.")
     ap.add_argument("--crates", type=Path,
                     help="The crates.json the run benchmarked; crates in it with no "
                          "results on a side are listed as such.")
@@ -350,6 +341,9 @@ def main(argv):
     ap.add_argument("--run-id", default="",
                     help="Identifies this run; a report for the same run (a re-run "
                          "attempt) replaces the earlier one instead of adding to it.")
+    ap.add_argument("--baseline-name", default="main",
+                    help="What to call the side given by --main-csv when showing it, "
+                         "if it is not `main` (default: main).")
     ap.add_argument("--summary-md", type=Path,
                     help="Also write a Markdown summary, for a PR comment, here.")
     ap.add_argument("--page-url", default="",
@@ -357,6 +351,8 @@ def main(argv):
     ap.add_argument("--repo-url", default="")
     ap.add_argument("--run-url", default="")
     args = ap.parse_args(argv)
+    global BASELINE
+    BASELINE = args.baseline_name or "main"
 
     branch_rows = read_rows(args.branch_csv)
     main_rows = read_rows(args.main_csv)
@@ -375,17 +371,17 @@ def main(argv):
 
     targets = sorted(set(expected_targets) | {tg for tg, _, _, _ in branch_rows})
     # The modes this branch is compared under are the ones it measured.
-    modes = sorted({m for _, m, _, _ in branch_rows}, key=mode_key)
+    modes = sorted({m for _, m, _, _ in branch_rows})
     main_keys = {(tg, m) for tg, m, _, _ in main_rows}
     for tg in targets:
         for m in modes:
             if (tg, m) not in main_keys:
-                print(f"warning: {m} on {tg} has no results on main", file=sys.stderr)
+                print(f"warning: {m} on {tg} has no results on {BASELINE}", file=sys.stderr)
 
     generated = int(time.time() * 1000)
     run = {"key": args.run_id or str(generated), "commit": args.commit,
            "generated": generated, "runUrl": args.run_url,
-           "mainCommits": list(dict.fromkeys(c for c in args.main_commit if c))}
+           "mainCommit": args.main_commit}
     prev_runs, prev_raw = load_previous(args.previous)
     runs = ([r for r in prev_runs if r["key"] != run["key"]] + [run])[-max(1, args.max_runs):]
     raw = {r["key"]: prev_raw[r["key"]] for r in runs[:-1]}
@@ -395,7 +391,8 @@ def main(argv):
         "generated": generated,
         "branch": args.branch,
         "commit": args.commit,
-        "mainCommits": list(dict.fromkeys(c for c in args.main_commit if c)),
+        "mainCommit": args.main_commit,
+        "baseline": BASELINE,
         "repoUrl": args.repo_url,
         "runUrl": args.run_url,
         "modes": modes,

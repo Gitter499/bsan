@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Usage: bench_plan.py <crates.json> <targets.json> --ref-name NAME --sha SHA
-                     --main-sha SHA [--main-cache raw.csv]
+Usage: bench_plan.py <crates.json> <targets.json> --sha SHA --main-sha SHA
+                     [--main-cache raw.csv]
 
-Print the plan for bench.yml as JSON:
+Print the plan for bench-branch.yml as JSON:
 
   {"builds": [...], "branch": {"include": [...]}, "main": {"include": [...]}}
 
@@ -14,19 +14,13 @@ per-crate bench jobs that run in those images, one job per crate and target.
 They are separate matrices because GitHub caps each at 256 jobs; the plan
 fails rather than exceed that.
 
-On `main`, every crate is benchmarked with Miri and every configuration, for
-the ratio-over-time dashboard; `branch` is empty.
-
-On any other branch, the page compares the branch against `main` under
-BorrowSanitizer's `full` configuration alone, so Miri and every other
-configuration are skipped. Every crate is benchmarked on the branch, and on
-`main` too when `main`'s raw results (published to gh-pages by its own runs)
-do not already cover it at that crate version. `--main-cache` is that
-published CSV, if there is one.
+Every crate is benchmarked on the branch (`--sha`), and on the baseline
+(`--main-sha`, usually `main`) too when its published results do not already
+cover it at that crate version. `--main-cache` is that published CSV, if
+there is one.
 
 Build entries carry: label, target, os, ref, image.
-Bench entries carry: label, target, os, crate, image, miri, modes (space-
-separated configurations to limit bench.py to; empty for all).
+Bench entries carry: label, target, os, crate, image.
 """
 
 import argparse
@@ -34,9 +28,6 @@ import csv
 import json
 import sys
 from pathlib import Path
-
-# The only configuration a branch is compared against `main` under.
-COMPARISON_MODES = ["full"]
 
 # GitHub's limit on the jobs one matrix can generate.
 MAX_MATRIX = 256
@@ -71,7 +62,6 @@ def main(argv):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("crates_json", type=Path)
     ap.add_argument("targets_json", type=Path)
-    ap.add_argument("--ref-name", required=True)
     ap.add_argument("--sha", required=True)
     ap.add_argument("--main-sha", required=True)
     ap.add_argument("--main-cache", type=Path)
@@ -79,15 +69,14 @@ def main(argv):
 
     crates = json.loads(args.crates_json.read_text())
     targets = json.loads(args.targets_json.read_text())
-    on_main = args.ref_name == "main"
-    have = set() if on_main else cached_pairs(args.main_cache)
-    refs = {"branch": args.sha, "main": args.sha if on_main else args.main_sha}
+    have = cached_pairs(args.main_cache)
+    refs = {"branch": args.sha, "main": args.main_sha}
 
     jobs = {"branch": [], "main": []}
     for t in targets:
         for c in crates:
-            sides = ["main"] if on_main else ["branch"]
-            if not on_main and (t["target"], c["name"], c["version"]) not in have:
+            sides = ["branch"]
+            if (t["target"], c["name"], c["version"]) not in have:
                 sides.append("main")
             for label in sides:
                 jobs[label].append({
@@ -96,8 +85,6 @@ def main(argv):
                     "os": t["os"],
                     "crate": c["name"],
                     "image": image(refs[label], t["target"]),
-                    "miri": on_main,
-                    "modes": "" if on_main else " ".join(COMPARISON_MODES),
                 })
 
     for label, entries in jobs.items():
