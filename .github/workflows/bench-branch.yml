@@ -1,0 +1,463 @@
+name: Branch benchmarks
+# Compares a branch against `main` and publishes the comparison to its own page
+# under branches/ on gh-pages. `main`'s own benchmarks, and the ratio-over-time
+# dashboard at the site root, are bench.yml's; nothing here touches them.
+#
+# Runs on a pull request once it has the latest `main` merged into it, so that
+# the only difference being measured is the PR's own, and leaves a comment on
+# the PR with a link and a summary. It can also be run by hand on any branch.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+permissions:
+  contents: write
+  # The build jobs push each run's bench images to ghcr, and cleanup deletes them.
+  packages: write
+  pull-requests: write
+# A newer push to a PR supersedes the run for the older one.
+concurrency:
+  group: bench-branch-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+env:
+  # The crates to benchmark.
+  CRATES_JSON: tests/benches/top-crates.json
+  # How many runs of a branch its page keeps, each drawn as its own line, so a
+  # rerun adds to the chart instead of replacing it. Older runs are dropped.
+  MAX_BRANCH_RUNS: 5
+  # Every target is benchmarked on its own runner.
+  TARGETS: >-
+    [{"target": "aarch64-unknown-linux-gnu", "os": "ubuntu-24.04-arm"},
+     {"target": "x86_64-unknown-linux-gnu", "os": "ubuntu-24.04"}]
+  # The branch's own commit and name. For a pull request these are its head,
+  # not the merge commit GitHub would otherwise check out.
+  HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+jobs:
+  # One bench job per crate and target, in two matrices: the branch's, and
+  # `main`'s. GitHub caps each matrix at 256 jobs, so CRATES_JSON can list at
+  # most 128 crates for the two targets; the plan fails beyond that. The jobs
+  # queue for the account's concurrent job slots, which other workflows share.
+  #
+  # `main` is measured once per `main` commit: the first run against it
+  # publishes its per-test results to gh-pages (main-cache/<sha>.csv), and later
+  # runs against the same commit reuse them, measuring `main` only for crates
+  # they do not cover, e.g. one the branch added or bumped.
+  #
+  # See bench_plan.py for the plan.
+  setup:
+    name: Plan runs
+    # A pull request from a fork gets a read-only token, so its run could
+    # neither publish nor comment; `main` has bench.yml.
+    if: >-
+      ${{ (github.event_name != 'pull_request'
+           || github.event.pull_request.head.repo.full_name == github.repository)
+          && github.ref != 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.main.outputs.ready }}
+      builds: ${{ steps.plan.outputs.builds }}
+      branch: ${{ steps.plan.outputs.branch }}
+      main: ${{ steps.plan.outputs.main }}
+      has_branch: ${{ steps.plan.outputs.has_branch }}
+      has_main: ${{ steps.plan.outputs.has_main }}
+      main_sha: ${{ steps.main.outputs.sha }}
+      cached_main_commit: ${{ steps.plan.outputs.cached_main_commit }}
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        ref: ${{ env.HEAD_SHA }}
+        # The whole history, to tell whether `main` has been merged in.
+        fetch-depth: 0
+    - name: Check that main is merged in
+      id: main
+      run: |
+        set -euo pipefail
+        # Pin `main` now, so every job that measures it measures the same commit.
+        git fetch --quiet origin main
+        sha=$(git rev-parse FETCH_HEAD)
+        echo "sha=$sha" >> "$GITHUB_OUTPUT"
+        if [ "$GITHUB_EVENT_NAME" != pull_request ] || git merge-base --is-ancestor "$sha" "$HEAD_SHA"; then
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::Not benchmarking: this branch does not have main's latest commit (${sha:0:8}) merged in."
+        fi
+    - name: Ask for main to be merged in
+      if: steps.main.outputs.ready == 'false'
+      env:
+        SHA: ${{ steps.main.outputs.sha }}
+      run: |
+        {
+          echo "<!-- bsan-branch-benchmarks -->"
+          echo "### Benchmarks for \`$BRANCH_NAME\`"
+          echo
+          echo "Not run: merge the latest \`main\` (\`${SHA:0:8}\`) into this branch, and the next push will be benchmarked against it."
+        } > "$RUNNER_TEMP/comment.md"
+    - if: steps.main.outputs.ready == 'false'
+      uses: ./.github/actions/pr-comment
+      with:
+        body-file: ${{ runner.temp }}/comment.md
+        pr: ${{ github.event.pull_request.number }}
+    - name: Fetch main's published results
+      if: steps.main.outputs.ready == 'true'
+      env:
+        MAIN_SHA: ${{ steps.main.outputs.sha }}
+      run: |
+        mkdir -p main-cache
+        if git fetch --depth=1 origin gh-pages \
+           && git show "FETCH_HEAD:main-cache/$MAIN_SHA.csv" > main-cache/raw.csv 2>/dev/null; then
+          echo "Found results for main at ${MAIN_SHA:0:8}."
+        else
+          rm -f main-cache/raw.csv
+          echo "No published results for main at ${MAIN_SHA:0:8}; it will be benchmarked in this run."
+        fi
+    - name: Plan the benchmark matrices
+      if: steps.main.outputs.ready == 'true'
+      id: plan
+      env:
+        MAIN_SHA: ${{ steps.main.outputs.sha }}
+      run: |
+        set -euo pipefail
+        printf '%s' "$TARGETS" > "$RUNNER_TEMP/targets.json"
+        cache_args=()
+        if [ -f main-cache/raw.csv ]; then
+          cache_args=(--main-cache main-cache/raw.csv)
+        fi
+        plan=$(python3 bsan-script/etc/bench_plan.py \
+          "$CRATES_JSON" "$RUNNER_TEMP/targets.json" \
+          --ref-name "$BRANCH_NAME" --sha "$HEAD_SHA" --main-sha "$MAIN_SHA" \
+          "${cache_args[@]}")
+        n_main=$(jq '.main.include | length' <<< "$plan")
+        n_branch=$(jq '.branch.include | length' <<< "$plan")
+        # The cache is used for whatever this run does not benchmark itself.
+        cached=""
+        if [ -f main-cache/raw.csv ] && [ "$n_main" -lt "$n_branch" ]; then
+          cached="$MAIN_SHA"
+        fi
+        {
+          echo "builds=$(jq -c '{include: .builds}' <<< "$plan")"
+          echo "branch=$(jq -c '.branch' <<< "$plan")"
+          echo "main=$(jq -c '.main' <<< "$plan")"
+          echo "has_branch=$([ "$n_branch" -gt 0 ] && echo true || echo false)"
+          echo "has_main=$([ "$n_main" -gt 0 ] && echo true || echo false)"
+          echo "cached_main_commit=$cached"
+        } >> "$GITHUB_OUTPUT"
+    - name: Upload main's published results
+      if: steps.plan.outputs.cached_main_commit != ''
+      uses: actions/upload-artifact@v7
+      with:
+        # Hand the merge job the exact copy this plan was made from.
+        name: main-cache
+        path: main-cache/
+        retention-days: 1
+  # One image per side and target, with BorrowSanitizer installed from that
+  # side's commit (see bench.Dockerfile), so that no bench job builds it.
+  build:
+    needs: setup
+    if: needs.setup.outputs.ready == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.setup.outputs.builds) }}
+    runs-on: ${{ matrix.os }}
+    name: "build ${{ matrix.label }} (${{ matrix.target }})"
+    steps:
+    # The Dockerfile comes from the branch, like the rest of the harness; the
+    # source it installs comes from the side's own commit.
+    - uses: actions/checkout@v7
+      with:
+        ref: ${{ env.HEAD_SHA }}
+    - name: Check out ${{ matrix.label }}
+      uses: actions/checkout@v7
+      with:
+        ref: ${{ matrix.ref }}
+        path: .src
+    - uses: docker/login-action@v4
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    - uses: docker/setup-buildx-action@v4
+    - name: Build and push
+      uses: docker/build-push-action@v7
+      with:
+        context: .src
+        file: bsan-script/etc/bench.Dockerfile
+        push: true
+        tags: ${{ matrix.image }}
+        provenance: false
+  bench-branch:
+    needs: [setup, build]
+    # A job whose image failed to build fails on its own; the rest still run.
+    if: ${{ !cancelled() && needs.setup.outputs.has_branch == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.setup.outputs.branch) }}
+    runs-on: ${{ matrix.os }}
+    container:
+      image: ${{ matrix.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.github_token }}
+    # Steps in a container job default to `sh`, not bash.
+    defaults:
+      run:
+        shell: bash
+    name: "branch ${{ matrix.crate }} (${{ matrix.target }})"
+    steps:
+    # The harness, bench.py and the crate list, from the branch.
+    - uses: actions/checkout@v7
+      with:
+        ref: ${{ env.HEAD_SHA }}
+    - uses: ./.github/actions/bench-crate
+      with:
+        label: ${{ matrix.label }}
+        crate: ${{ matrix.crate }}
+        target: ${{ matrix.target }}
+        miri: ${{ matrix.miri }}
+        modes: ${{ matrix.modes }}
+        job-name: "branch ${{ matrix.crate }} (${{ matrix.target }})"
+        check-run-id: ${{ job.check_run_id }}
+  # The same as bench-branch, for `main`, for the crates its published results
+  # for this `main` commit do not cover.
+  bench-main:
+    needs: [setup, build]
+    if: ${{ !cancelled() && needs.setup.outputs.has_main == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.setup.outputs.main) }}
+    runs-on: ${{ matrix.os }}
+    container:
+      image: ${{ matrix.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.github_token }}
+    defaults:
+      run:
+        shell: bash
+    name: "main ${{ matrix.crate }} (${{ matrix.target }})"
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        ref: ${{ env.HEAD_SHA }}
+    - uses: ./.github/actions/bench-crate
+      with:
+        label: ${{ matrix.label }}
+        crate: ${{ matrix.crate }}
+        target: ${{ matrix.target }}
+        miri: ${{ matrix.miri }}
+        modes: ${{ matrix.modes }}
+        job-name: "main ${{ matrix.crate }} (${{ matrix.target }})"
+        check-run-id: ${{ job.check_run_id }}
+  merge:
+    name: Merge & Publish
+    needs: [setup, build, bench-branch, bench-main]
+    # Publish whatever the bench jobs produced, even if some failed; the report
+    # lists the crates that have no results.
+    if: ${{ !cancelled() && needs.setup.outputs.ready == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        ref: ${{ env.HEAD_SHA }}
+    - name: Download results
+      uses: actions/download-artifact@v8
+      with:
+        pattern: results_*
+        merge-multiple: true
+        path: results/
+    - name: Download main's published results
+      if: needs.setup.outputs.cached_main_commit != ''
+      uses: actions/download-artifact@v8
+      with:
+        name: main-cache
+        path: main-cache/
+    - name: Resolve Pages location
+      id: pages
+      run: |
+        owner=$(printf '%s' "${GITHUB_REPOSITORY%%/*}" | tr '[:upper:]' '[:lower:]')
+        root="https://${owner}.github.io/${GITHUB_REPOSITORY#*/}/"
+        # Branch names may contain `/` and other characters that are awkward
+        # in a path, so flatten them into a single segment.
+        slug=$(printf '%s' "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed 's|[^a-z0-9._-]|-|g')
+        {
+          echo "dir=branches/${slug}"
+          echo "url=${root}branches/${slug}/"
+          echo "root=${root}"
+        } >> "$GITHUB_OUTPUT"
+    - name: Build branch report
+      env:
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        MAIN_SHA: ${{ needs.setup.outputs.main_sha }}
+        CACHED_MAIN_COMMIT: ${{ needs.setup.outputs.cached_main_commit }}
+        DIR: ${{ steps.pages.outputs.dir }}
+        PAGE_URL: ${{ steps.pages.outputs.url }}
+      run: |
+        set -euo pipefail
+        # The page's last report, whose runs are kept as earlier lines.
+        previous=()
+        if git fetch --depth=1 origin gh-pages \
+           && git show "FETCH_HEAD:$DIR/data.json" > "$RUNNER_TEMP/previous.json" 2>/dev/null; then
+          previous=(--previous "$RUNNER_TEMP/previous.json")
+        fi
+        # The published copy goes first, so a crate this run re-measured on main
+        # replaces it (the last row for a test wins). Both are the same commit.
+        main_csvs=()
+        if [ -n "$CACHED_MAIN_COMMIT" ]; then
+          main_csvs+=(main-cache/raw.csv)
+        fi
+        shopt -s nullglob
+        main_csvs+=(results/results_main_*.csv)
+        printf '%s' "$TARGETS" > "$RUNNER_TEMP/targets.json"
+        python3 bsan-script/etc/branch_report.py data.json \
+          --branch-csv results/results_branch_*.csv \
+          --main-csv "${main_csvs[@]}" \
+          --main-commit "$MAIN_SHA" \
+          --crates "$CRATES_JSON" \
+          --targets "$RUNNER_TEMP/targets.json" \
+          "${previous[@]}" \
+          --max-runs "$MAX_BRANCH_RUNS" \
+          --run-id "$GITHUB_RUN_ID" \
+          --branch "$BRANCH_NAME" \
+          --commit "$HEAD_SHA" \
+          --repo-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+          --run-url "$RUN_URL" \
+          --summary-md summary.md \
+          --page-url "$PAGE_URL"
+        # main's results for this commit, cached and fresh together, for later
+        # runs against the same `main` to reuse.
+        python3 - main-cache.csv "${main_csvs[@]}" <<'EOF'
+        import csv, sys
+        out, *paths = sys.argv[1:]
+        rows, header = {}, None
+        for p in paths:
+            with open(p, newline="") as f:
+                r = csv.DictReader(f)
+                header = header or r.fieldnames
+                for row in r:
+                    rows[(row["target"], row["crate_name"], row["version"],
+                          row["test_name"], row["mode"])] = row
+        if header:
+            with open(out, "w", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=header, extrasaction="ignore")
+                w.writeheader()
+                w.writerows(rows.values())
+        EOF
+    - name: Publish branch page
+      env:
+        DIR: ${{ steps.pages.outputs.dir }}
+        ROOT: ${{ steps.pages.outputs.root }}
+        MAIN_SHA: ${{ needs.setup.outputs.main_sha }}
+        PAGES: ${{ runner.temp }}/pages
+      run: |
+        set -euo pipefail
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+        # Lay this run's files over a fresh copy of gh-pages and commit them.
+        # Everything here is this branch's own directory and main's cache for
+        # MAIN_SHA, so after losing a race with another push (bench.yml's, or
+        # another branch's) it is safe to start over from the newer gh-pages.
+        publish() {
+          git fetch --quiet origin +refs/heads/gh-pages:refs/remotes/origin/gh-pages
+          rm -rf "$PAGES"
+          git worktree prune
+          git worktree add --quiet -B gh-pages "$PAGES" origin/gh-pages
+          cd "$PAGES"
+          if [ ! -f branch-page/index.html ]; then
+            echo "::error::gh-pages has no branch-page/index.html. The per-branch page lives on gh-pages beside the root dashboard; add branch-page/{index.html,main.js,branch.css} there."
+            exit 1
+          fi
+
+          # Only the page shell is copied per branch, because a directory needs
+          # its own index.html to be served. main.js and branch.css are loaded
+          # out of branch-page/, so fixing the page reaches every branch at once.
+          mkdir -p "$DIR"
+          cp branch-page/index.html "$DIR/index.html"
+          cp "$GITHUB_WORKSPACE/data.json" "$DIR/data.json"
+
+          # Only the latest `main` is ever compared against, since a PR is only
+          # benchmarked with it merged in, so older commits' results go.
+          mkdir -p main-cache
+          find main-cache -name '*.csv' ! -name "$MAIN_SHA.csv" -delete
+          if [ -f "$GITHUB_WORKSPACE/main-cache.csv" ]; then
+            cp "$GITHUB_WORKSPACE/main-cache.csv" "main-cache/$MAIN_SHA.csv"
+          fi
+
+          {
+            echo '<!DOCTYPE html>'
+            echo '<html lang="en"><head><meta charset="utf-8">'
+            echo '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            echo '<link rel="stylesheet" href="../style.css">'
+            echo '<link rel="icon" type="image/x-icon" href="../favicon.svg">'
+            echo '<title>BorrowSanitizer Benchmarks: branches</title></head>'
+            echo '<body><header id="header"><h1 class="dashboard-title">Benchmarks by branch</h1></header>'
+            echo "<main id=\"main\"><ul><li><a href=\"${ROOT}\">main (history)</a></li>"
+            for d in branches/*/; do
+              [ -f "${d}data.json" ] || continue
+              n=$(basename "$d")
+              echo "<li><a href=\"${n}/\">${n}</a></li>"
+            done
+            echo '</ul></main></body></html>'
+          } > branches/index.html
+
+          git add -A
+          if git diff --staged --quiet; then
+            cd "$GITHUB_WORKSPACE"
+            return 0
+          fi
+          git commit --quiet -m "Publish benchmark report for ${BRANCH_NAME}"
+          local pushed=0
+          git push --quiet origin gh-pages && pushed=1
+          cd "$GITHUB_WORKSPACE"
+          [ "$pushed" = 1 ]
+        }
+
+        for attempt in 1 2 3 4 5; do
+          if publish; then
+            exit 0
+          fi
+          echo "gh-pages moved while publishing; retrying ($attempt)"
+          sleep $((attempt * 10))
+        done
+        echo "::error::Could not publish to gh-pages."
+        exit 1
+    - name: Link to results
+      run: |
+        echo "Benchmarks published to <${{ steps.pages.outputs.url }}>" >> "$GITHUB_STEP_SUMMARY"
+        cat summary.md >> "$GITHUB_STEP_SUMMARY"
+    - if: github.event_name == 'pull_request'
+      uses: ./.github/actions/pr-comment
+      with:
+        body-file: summary.md
+        pr: ${{ github.event.pull_request.number }}
+  # The bench images are only for this run; delete them so they do not pile up
+  # on ghcr. Its own job, so that it runs even when the run is cancelled or
+  # merge fails. Best-effort: a leftover image costs storage, not correctness.
+  # A job re-run after this finds its image gone; start a new run instead.
+  cleanup:
+    name: Delete bench images
+    needs: [setup, build, bench-branch, bench-main, merge]
+    if: ${{ always() && needs.setup.outputs.ready == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+    - name: Delete this run's bench images
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BUILDS: ${{ needs.setup.outputs.builds }}
+      run: |
+        set -euo pipefail
+        org="${GITHUB_REPOSITORY%%/*}"
+        tags=$(jq -r '.include[].image | sub(".*:"; "")' <<< "$BUILDS")
+        [ -n "$tags" ] || exit 0
+        # Newest first, and this run's are among the newest.
+        versions=$(gh api "/orgs/$org/packages/container/bsan/versions?per_page=100")
+        for tag in $tags; do
+          id=$(jq -r --arg t "$tag" '.[] | select(.metadata.container.tags | index($t)) | .id' <<< "$versions" | head -n1)
+          if [ -n "$id" ]; then
+            gh api -X DELETE "/orgs/$org/packages/container/bsan/versions/$id" && echo "Deleted $tag"
+          else
+            echo "No image tagged $tag"
+          fi
+        done

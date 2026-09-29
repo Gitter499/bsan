@@ -45,6 +45,7 @@ Earlier runs
 import argparse
 import csv
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -55,6 +56,9 @@ MODE_ORDER = ["full", "full-no-wildcard", "no-op", "native"]
 # Modes that do not measure BorrowSanitizer, so comparing them across two of its
 # builds says nothing. `main`'s cached results still carry Miri.
 IGNORED_MODES = {"miri-tb"}
+
+# Marks the PR comment this report writes, so a later run edits it in place.
+COMMENT_MARKER = "<!-- bsan-branch-benchmarks -->"
 
 # The test name a whole-crate entry is listed under.
 WHOLE_CRATE = "(whole crate)"
@@ -133,6 +137,51 @@ def add_history(data, main_ok, runs, raw, tg, m):
     data["branch"] = history[latest]
     data["history"] = history
     data["tests"] = tests
+
+
+def mean_geomean(values):
+    """The mean and geometric mean of positive numbers."""
+    return (sum(values) / len(values),
+            math.exp(sum(math.log(v) for v in values) / len(values)))
+
+
+def write_summary(path, report, page_url):
+    """Write the PR comment: a link to the page, and per target the mean and
+    geomean of the per-crate totals on `main` and on the newest run.
+
+    Both rows are over the crates both have a point for, so they average the
+    same workload; the page's table does the same over every line it draws.
+    """
+    branch = report["branch"] or "branch"
+    commit = (report["commit"] or "")[:8]
+    mains = ", ".join(f"`{c[:8]}`" for c in report["mainCommits"]) or "unknown"
+    mode = "full" if "full" in report["modes"] else (report["modes"] or ["?"])[0]
+    out = [COMMENT_MARKER,
+           f"### Benchmarks for `{branch}`",
+           "",
+           f"[Dashboard]({page_url}) · [workflow run]({report['runUrl']}) · "
+           f"`{commit}` against main {mains}, under `{mode}`.",
+           ""]
+    for tg in sorted(report["targets"]):
+        data = report["targets"][tg].get(mode)
+        out.append(f"**{tg}**")
+        out.append("")
+        common = [c for c in (data or {}).get("crates", [])
+                  if data["main"].get(c, 0) > 0 and data["branch"].get(c, 0) > 0]
+        if not common:
+            out += ["No crate has a test that succeeded on both main and the branch.", ""]
+            continue
+        out += ["| Config | Mean (s) | Geomean (s) |",
+                "| ------ | -------- | ----------- |"]
+        for name, side in (("main", "main"), (branch, "branch")):
+            mean, geo = mean_geomean([data[side][c] for c in common])
+            out.append(f"| {name} | {mean:.3f} | {geo:.3f} |")
+        changed = sum(1 for d in data["dropped"] if d["reason"] == "changed")
+        note = f"Over {len(common)} crate(s)."
+        if changed:
+            note += f" {changed} test(s) have a different result than on main; see the dashboard."
+        out += ["", note, ""]
+    Path(path).write_text("\n".join(out))
 
 
 def mode_key(mode):
@@ -301,6 +350,10 @@ def main(argv):
     ap.add_argument("--run-id", default="",
                     help="Identifies this run; a report for the same run (a re-run "
                          "attempt) replaces the earlier one instead of adding to it.")
+    ap.add_argument("--summary-md", type=Path,
+                    help="Also write a Markdown summary, for a PR comment, here.")
+    ap.add_argument("--page-url", default="",
+                    help="The branch's page, which the summary links to.")
     ap.add_argument("--repo-url", default="")
     ap.add_argument("--run-url", default="")
     args = ap.parse_args(argv)
@@ -368,6 +421,8 @@ def main(argv):
 
     # Compact: with many crates and runs, indentation is most of the file.
     args.output.write_text(json.dumps(report, separators=(",", ":")))
+    if args.summary_md:
+        write_summary(args.summary_md, report, args.page_url)
 
     for tg, by_mode in report["targets"].items():
         for m, data in by_mode.items():
