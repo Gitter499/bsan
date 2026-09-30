@@ -44,6 +44,7 @@ Earlier runs
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import sys
@@ -83,6 +84,16 @@ def successes(rows, tg, m, crates):
             if v is not None:
                 out.setdefault(c, {})[t] = rounded(v)
     return out
+
+
+def dataset_id(crates_json):
+    """A fingerprint of the benchmarked workload: every crate, version and
+    excluded test in crates.json, whatever its order or formatting. Runs are
+    only drawn together while it is unchanged, since otherwise their lines sum
+    over different tests."""
+    crates = sorted((c["name"], c["version"], sorted(c.get("exclude") or []))
+                    for c in json.loads(crates_json.read_text()))
+    return hashlib.sha256(json.dumps(crates).encode()).hexdigest()[:16]
 
 
 def load_previous(path):
@@ -379,11 +390,21 @@ def main(argv):
                 print(f"warning: {m} on {tg} has no results on {BASELINE}", file=sys.stderr)
 
     generated = int(time.time() * 1000)
-    run = {"key": args.run_id or str(generated), "commit": args.commit,
-           "generated": generated, "runUrl": args.run_url,
-           "mainCommit": args.main_commit}
+    dataset = dataset_id(args.crates) if args.crates else None
     prev_runs, prev_raw = load_previous(args.previous)
-    runs = ([r for r in prev_runs if r["key"] != run["key"]] + [run])[-max(1, args.max_runs):]
+    # A run measured over a different crate list is not comparable; the chart
+    # starts over when the list changes.
+    comparable = [r for r in prev_runs if r.get("dataset") == dataset]
+    if len(comparable) < len(prev_runs):
+        print(f"{len(prev_runs) - len(comparable)} earlier run(s) dropped: "
+              f"measured over a different crate list", file=sys.stderr)
+    # `seq` counts the branch's runs, so each keeps the colour it was given on
+    # the page as older ones drop off.
+    seq = max((r.get("seq", -1) for r in comparable), default=-1) + 1
+    run = {"key": args.run_id or str(generated), "seq": seq, "dataset": dataset,
+           "commit": args.commit, "generated": generated, "runUrl": args.run_url,
+           "mainCommit": args.main_commit}
+    runs = ([r for r in comparable if r["key"] != run["key"]] + [run])[-max(1, args.max_runs):]
     raw = {r["key"]: prev_raw[r["key"]] for r in runs[:-1]}
     raw[run["key"]] = {}
 

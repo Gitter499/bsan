@@ -11,7 +11,21 @@
             "zlib::tests::qc_writer",
             "deflate::tests::qc_writer",
             "deflate::tests::qc_reader",
-            "gz::tests::qc_reader"
+            "gz::tests::qc_reader",
+            "deflate::tests::reset_decoder",
+            "deflate::tests::reset_reader",
+            "deflate::tests::reset_writer",
+            "deflate::tests::roundtrip",
+            "deflate::tests::roundtrip2",
+            "deflate::tests::roundtrip3",
+            "deflate::tests::total_in",
+            "deflate::tests::zero_length_read_with_data",
+            "gz::tests::gzip_encoder_matches_rfc1952",
+            "gz::tests::roundtrip_big",
+            "gz::tests::roundtrip_big2",
+            "zlib::tests::roundtrip",
+            "zlib::tests::roundtrip2",
+            "zlib::tests::roundtrip3"
         ]
     },
     {
@@ -32,7 +46,9 @@
             "imp::neon::tests::random",
             "imp::avx2::tests::random",
             "imp::avx2::tests::random",
-            "imp::sse2::tests::random"
+            "imp::sse2::tests::random",
+            "mp::neon::tests::ones",
+            "imp::neon::tests::zeroes"
         ]
     },
     {
@@ -114,7 +130,9 @@
             "tests::search_leftmost_first_anchored_nfa_noncontig_default",
             "tests::search_standard_stream_nfa_contig_default",
             "tests::search_standard_overlapping_nfa_contig_all_sparse",
-            "tests::search_standard_anchored_nfa_contig_default"
+            "tests::search_standard_anchored_nfa_contig_default",
+            "tests::regression_stream_rare_byte_prefilter",
+            "tests::search_leftmost_longest::dfa_start_both_no_byte_class"
         ]
     },
     {
@@ -194,7 +212,19 @@
     },
     {
         "name": "colored",
-        "version": "3.1.1"
+        "version": "3.1.1",
+        "exclude": [
+            "tests::compute_style_blue_bold_on_blue",
+            "tests::compute_style_blue_on_blue",
+            "tests::compute_style_bright_blue_on_bright_blue",
+            "tests::compute_style_simple_bg_blue",
+            "tests::compute_style_simple_bg_bright_blue",
+            "tests::compute_style_simple_bold",
+            "tests::compute_style_simple_fg_blue",
+            "tests::compute_style_simple_fg_bright_blue",
+            "tests::escape_reset_sequence_spec_should_replace_inner_reset_sequence_with_current_style",
+            "tests::escape_reset_sequence_spec_should_replace_multiple_inner_reset_sequences_with_current_style"
+        ]
     },
     {
         "name": "arc-swap",
@@ -215,10 +245,6 @@
     {
         "name": "csv",
         "version": "1.4.0"
-    },
-    {
-        "name": "crossbeam-channel",
-        "version": "0.5.15"
     },
     {
         "name": "der",
@@ -267,10 +293,6 @@
     {
         "name": "const-oid",
         "version": "0.10.2"
-    },
-    {
-        "name": "inout",
-        "version": "0.2.2"
     },
     {
         "name": "encoding_rs",
@@ -398,10 +420,6 @@
         ]
     },
     {
-        "name": "ordered-float",
-        "version": "5.3.0"
-    },
-    {
         "name": "percent-encoding",
         "version": "2.3.2"
     },
@@ -444,15 +462,7 @@
     },
     {
         "name": "utf-8",
-        "version": "0.7.6",
-        "exclude": [
-            "test_bufread_decoder",
-            "test_incremental_decoder"
-        ]
-    },
-    {
-        "name": "subtle",
-        "version": "2.6.1"
+        "version": "0.7.6"
     },
     {
         "name": "smallvec",
