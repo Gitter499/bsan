@@ -3,15 +3,19 @@
 #include "bsan_global.h"
 #include "bsan_interface_internal.h"
 #include "sanitizer_common/sanitizer_atomic.h"
+#include "sanitizer_common/sanitizer_linux.h"
 
 using namespace __sanitizer;
 using namespace __bsan;
 
+// Threads have a particular lifecycle. First, we create a new
+// `BsanThread` object. Then, we register this object within the
+// `ThreadRegistry`.
 namespace __bsan {
 
 void BsanThreadContext::OnCreated(void *arg) {
   thread = static_cast<BsanThread *>(arg);
-  thread->set_context(this);
+  thread->setContext(this);
 }
 
 void BsanThreadContext::OnFinished() {
@@ -20,14 +24,16 @@ void BsanThreadContext::OnFinished() {
   // Any thread-local state that involves the GC must be handled
   // within this function.
   if (thread) {
-    global_ctx()->acquireProvenance(thread->zct);
+    // We know that the GC is not running here, because we
+    // have locked the thread registry, which is a prerequisite
+    // for the GC.
+    global_ctx()->acquireProvenance(thread->zct_);
   }
   thread = nullptr;
 }
 
 static ThreadRegistry *bsan_thread_registry;
 static ThreadArgRetval *thread_data;
-
 static Mutex mu_for_thread_context;
 
 static LowLevelAllocator allocator_for_thread_context;
@@ -68,11 +74,6 @@ ThreadRegistry &GetThreadRegistry() {
 ThreadArgRetval &GetThreadArgRetval() {
   InitThreads();
   return *thread_data;
-}
-
-BsanThreadContext *GetThreadContextByTidLocked(u32 tid) {
-  return static_cast<BsanThreadContext *>(
-      GetThreadRegistry().GetThreadLocked(tid));
 }
 
 BsanThread *CurrentThread() {
@@ -141,7 +142,8 @@ void BsanThread::Init() {
   shadow_stack_size_ = stack_top_ - stack_bottom_;
   shadow_stack_bottom_ = MmapOrDie(shadow_stack_size_, __func__);
   __bsan_shadow_stack =
-      (Provenance *)(((uptr)shadow_stack_bottom_) + shadow_stack_size_);
+      (Provenance *)((uptr)shadow_stack_bottom_ + shadow_stack_size_);
+  atomic_store(&curr_stack_bottom_, (uptr)stack_top_, memory_order_relaxed);
   // We record the address of the thread-local shadow stack pointer so
   // that the GC can accurately read the initialized contents of the
   // shadow stack when it stops the world.
@@ -152,6 +154,79 @@ void BsanThread::Init() {
   visits_ptr_ = &__bsan_visits_since_gc;
 }
 
+bool BsanThread::enterSafeMode() {
+  publishStackPointer(memory_order_relaxed);
+  return setGCState(GCState::kSafe, memory_order_release) == GCState::kUnsafe;
+}
+
+bool BsanThread::tryEnterUnsafeMode() {
+  setGCState(kUnsafe, memory_order_relaxed);
+  atomic_signal_fence(memory_order_seq_cst);
+  // Anything that moves us back into unsafe mode needs an acquire load
+  // to ensure that we are ordered after the GC restarts the world.
+  return getGCTrigger(memory_order_acquire) == 0;
+}
+
+void BsanThread::poll() {
+  // TODO: We need to block asynchronous signals during polling.
+  // Otherwise, if the user's code has an instrumented asynchronous
+  // signal handler, then we'll be kicked out of the waiting state
+  // back into the unsafe state, which is an invalid transition.
+  // Only the GC is allowed to move threads out of waiting.
+  publishStackPointer(memory_order_relaxed);
+  do {
+    setGCState(GCState::kWaiting, memory_order_release);
+    atomic_signal_fence(memory_order_seq_cst);
+    if (getGCTrigger(memory_order_relaxed)) {
+      FutexWait(&__bsan_gc_trigger, 1);
+    }
+  } while (!tryEnterUnsafeMode());
+}
+
+bool BsanThread::enterUnsafeMode() {
+  auto state = getGCState(memory_order_relaxed);
+  if (LIKELY(state == kUnsafe))
+    return false;
+  if (!tryEnterUnsafeMode())
+    poll();
+  return true;
+};
+
+BlockIndex BsanThread::AllocBlock() {
+  return block_allocator.Alloc(&this->block_cache_);
+}
+
+void BsanThread::FreeBlock(BlockIndex idx) {
+  block_allocator.Free(&this->block_cache_, idx);
+}
+
+void BsanThread::publishStackPointer(memory_order order) {
+  uptr addr = (uptr)__builtin_frame_address(0);
+  atomic_store(&curr_stack_bottom_, addr, order);
+}
+
+uptr BsanThread::getStackPointer(memory_order order) {
+  return atomic_load(&curr_stack_bottom_, order);
+}
+
+bool BsanThread::ownsAddress(void *addr) {
+  return this->ownsAddress((uptr)addr);
+}
+
+bool BsanThread::ownsAddress(uptr addr) {
+  return addr >= stackBottom() && addr < stackTop();
+}
+
+GCState BsanThread::getGCState(memory_order order) {
+  return (GCState)atomic_load(&gc_state_, order);
+}
+
+GCState BsanThread::setGCState(GCState state, memory_order order) {
+  auto prev_state = (GCState)atomic_load(&gc_state_, memory_order_relaxed);
+  atomic_store(&gc_state_, state, order);
+  return prev_state;
+}
+
 void BsanThread::TSDDtor(void *tsd) {
   BsanThreadContext *context = (BsanThreadContext *)tsd;
   if (context->thread)
@@ -160,8 +235,19 @@ void BsanThread::TSDDtor(void *tsd) {
 
 void BsanThread::Destroy() {
   int tid = this->tid();
-  bool was_running =
-      (GetThreadRegistry().FinishThread(tid) == ThreadStatusRunning);
+  bool was_running;
+  {
+    // We need to allow the GC to run before
+    // we attempt to lock the thread registry.
+    // If we did not do this, then the GC would be able
+    // lock the registry while we are still in an unsafe state.
+    // This is an extra precaution—we should typically be in
+    // a safe state already when we reach this function.
+    AllowGC allow;
+    DCHECK(getGCState(memory_order_relaxed) == kSafe);
+    was_running =
+        (GetThreadRegistry().FinishThread(tid) == ThreadStatusRunning);
+  }
   if (was_running) {
     if (BsanThread *thread = CurrentThread())
       CHECK_EQ(this, thread);
@@ -170,7 +256,7 @@ void BsanThread::Destroy() {
     block_allocator.FlushCache(&this->block_cache_);
     if (common_flags()->use_sigaltstack)
       UnsetAlternateSignalStack(altstack_base_);
-    zct.~ZeroCountTable();
+    zct_.~ConcreteProvenanceSet();
     UnmapOrDie(shadow_stack_bottom_, shadow_stack_size_);
   } else {
     CHECK_NE(this, CurrentThread());
