@@ -1,0 +1,1229 @@
+diff --git a/src/brotli/tests/bsan_drivers.rs b/src/brotli/tests/bsan_drivers.rs
+new file mode 100644
+index 00000000..d553a6e5
+--- /dev/null
++++ b/src/brotli/tests/bsan_drivers.rs
+@@ -0,0 +1,74 @@
++//! BorrowSanitizer drivers for bun_brotli (instrumented brotli). Not part of Bun's suite.
++use bun_brotli::{c, DecoderOptions, StreamingDecoder};
++
++fn payload(n: usize) -> Vec<u8> {
++    let mut v = Vec::with_capacity(n);
++    let mut x: u32 = 0x1234_5678;
++    while v.len() < n {
++        x ^= x << 13; x ^= x >> 17; x ^= x << 5;
++        v.extend_from_slice(match x % 3 { 0 => &b"<div class=\"bun\">"[..], 1 => b"brotli ", _ => b"</div>\n" });
++    }
++    v.truncate(n);
++    v
++}
++
++/// http/compress_body.rs compress_brotli: encode into a shared buffer, else encode_append.
++fn encode(input: &[u8], quality: i32) -> Vec<u8> {
++    let bound = c::BrotliEncoderMaxCompressedSize(input.len());
++    let mut shared = vec![0u8; bound];
++    let n = bun_brotli::encode(quality, c::BROTLI_DEFAULT_WINDOW, c::BrotliEncoderMode::generic, input, &mut shared).expect("encode");
++    let mut appended = Vec::with_capacity(bound);
++    let m = bun_brotli::encode_append(quality, c::BROTLI_DEFAULT_WINDOW, c::BrotliEncoderMode::generic, input, &mut appended).expect("encode_append");
++    assert_eq!(&shared[..n], &appended[..m]);
++    appended
++}
++
++fn decode(data: &[u8], chunk: usize) -> Vec<u8> {
++    let mut dec = StreamingDecoder::new(&DecoderOptions::default()).unwrap();
++    let mut out = Vec::new();
++    let chunks: Vec<&[u8]> = data.chunks(chunk).collect();
++    for (i, ch) in chunks.iter().enumerate() {
++        match dec.decompress(ch, &mut out, usize::MAX, i + 1 == chunks.len()) {
++            Ok(_) | Err(bun_brotli::Error::ShortRead) => {}
++            Err(e) => panic!("{e:?}"),
++        }
++    }
++    out
++}
++
++#[test]
++fn http_body_roundtrip() {
++    let input = payload(30_000);
++    for q in [1, 5, 11] {
++        let e = encode(&input, q);
++        assert_eq!(decode(&e, 1000), input);
++        assert_eq!(decode(&e, 1), input);
++    }
++}
++
++/// max_output windowing (Decompressor drains in bounded steps).
++#[test]
++fn bounded_output_window() {
++    let input = payload(50_000);
++    let e = encode(&input, 4);
++    let mut dec = StreamingDecoder::new(&DecoderOptions::default()).unwrap();
++    let mut out = Vec::new();
++    let mut rest: &[u8] = &e;
++    loop {
++        let max = out.len() + 3000;
++        let n = dec.decompress(rest, &mut out, max, true).expect("decompress");
++        rest = &rest[n..];
++        if !dec.is_inflating() && out.len() == input.len() { break; }
++        if rest.is_empty() && out.len() >= input.len() { break; }
++    }
++    assert_eq!(out, input);
++}
++
++#[test]
++fn corrupt_input() {
++    let mut e = encode(&payload(10_000), 5);
++    for b in e.iter_mut().skip(3).step_by(4) { *b ^= 0x3c; }
++    let mut dec = StreamingDecoder::new(&DecoderOptions::default()).unwrap();
++    let mut out = Vec::new();
++    assert!(dec.decompress(&e, &mut out, usize::MAX, true).is_err());
++}
+diff --git a/src/css/tests/bsan_drivers.rs b/src/css/tests/bsan_drivers.rs
+new file mode 100644
+index 00000000..ad13bb15
+--- /dev/null
++++ b/src/css/tests/bsan_drivers.rs
+@@ -0,0 +1,73 @@
++//! BorrowSanitizer drivers for bun_css: the bundler's parse → minify → print pipeline
++//! (bundler/transpiler.rs) over real-world stylesheets from Bun's own CSS test corpus.
++//! Pure Rust, but far too slow for Miri at this size. Not part of Bun's suite.
++use bun_alloc::Arena;
++
++fn corpus(name: &str) -> Vec<u8> {
++    let p = format!("{}/../../test/js/bun/css/files/{name}", env!("CARGO_MANIFEST_DIR"));
++    std::fs::read(&p).unwrap_or_else(|e| panic!("{p}: {e}"))
++}
++
++/// bundler/transpiler.rs: parse, minify, to_css (pretty and minified).
++fn pipeline(code: &[u8], css_modules: bool, minify: bool) -> Vec<u8> {
++    let arena = Arena::new();
++    // SAFETY: as in transpiler.rs — the AST is dropped before `arena` (only `code` escapes).
++    let alloc: &'static Arena = unsafe { bun_ptr::detach_lifetime_ref::<Arena>(&arena) };
++    let mut opts = bun_css::ParserOptions::default(None);
++    if css_modules {
++        opts.filename = b"input.module.css";
++        opts.css_modules = Some(bun_css::CssModuleConfig::default());
++    }
++    let (mut sheet, extra) = bun_css::StyleSheet::<bun_css::DefaultAtRule>::parse(alloc, code, opts, None, bun_ast::Index::source(0u32))
++        .unwrap_or_else(|e| panic!("parse: {e}"));
++    if let Err(e) = sheet.minify(alloc, &bun_css::MinifyOptions::default(), &extra) {
++        panic!("minify: {}", e.kind);
++    }
++    let symbols = bun_ast::symbol::Map::init_list(vec![extra.symbols]);
++    let out = sheet
++        .to_css(alloc, &bun_css::PrinterOptions { minify, ..bun_css::PrinterOptions::default() }, None, None, &symbols)
++        .unwrap_or_else(|e| panic!("print: {e}"));
++    drop(sheet);
++    out.code
++}
++
++#[test]
++fn small_stylesheets() {
++    for f in ["normalize.css", "hint.css", "random-gradients.css", "trainer-gallery-holo.css"] {
++        let code = corpus(f);
++        let pretty = pipeline(&code, false, false);
++        let min = pipeline(&code, false, true);
++        assert!(!pretty.is_empty() && min.len() <= pretty.len(), "{f}");
++        // Printer output must re-parse.
++        let _ = pipeline(&min, false, true);
++    }
++}
++
++#[test]
++fn css_modules() {
++    let code = corpus("hint.css");
++    let out = pipeline(&code, true, true);
++    assert!(!out.is_empty());
++}
++
++#[test]
++fn framework_stylesheets() {
++    for f in ["animate.css", "pico.css", "tachyons.css"] {
++        let code = corpus(f);
++        let out = pipeline(&code, false, true);
++        assert!(!out.is_empty(), "{f}");
++    }
++}
++
++#[test]
++fn malformed_input_recovers() {
++    let inputs: [&[u8]; 6] = [
++        b"a{color:red", b"@media (min-width: {", b"a{b:c}}}}{{{", b"\xff\xfe\x00a{}",
++        b"@import url(", b".x{background:url(\"unterminated",
++    ];
++    for code in inputs {
++        let arena = Arena::new();
++        let alloc: &'static Arena = unsafe { bun_ptr::detach_lifetime_ref::<Arena>(&arena) };
++        let _ = bun_css::StyleSheet::<bun_css::DefaultAtRule>::parse(alloc, code, bun_css::ParserOptions::default(None), None, bun_ast::Index::source(0u32));
++    }
++}
+diff --git a/src/libarchive/tests/bsan_drivers.rs b/src/libarchive/tests/bsan_drivers.rs
+new file mode 100644
+index 00000000..a3e1e71f
+--- /dev/null
++++ b/src/libarchive/tests/bsan_drivers.rs
+@@ -0,0 +1,130 @@
++//! BorrowSanitizer drivers for bun_libarchive (instrumented libarchive + zlib-ng). Each test
++//! mirrors a production caller. Fixtures come from tests/fixtures (generated with Python's
++//! tarfile: pax + GNU long names, symlinks incl. escaping/absolute ones, hardlink, `..` and
++//! absolute entries, a FIFO, a multi-block file, UTF-8 names). Not part of Bun's suite.
++use bun_libarchive::lib::{ArchiveIterator, IteratorResult};
++use bun_libarchive::{ArchiveAppender, Archiver, Context, ExtractOptions};
++use std::os::fd::AsRawFd;
++
++const PAX: &[u8] = include_bytes!("fixtures/pax.tar");
++const GNU: &[u8] = include_bytes!("fixtures/gnu.tar");
++const PAX_TGZ: &[u8] = include_bytes!("fixtures/pax.tgz");
++const TRUNC: &[u8] = include_bytes!("fixtures/truncated.tar");
++const CORRUPT: &[u8] = include_bytes!("fixtures/corrupt.tar");
++
++fn tmpdir(tag: &str) -> (std::path::PathBuf, std::fs::File) {
++    let p = std::env::temp_dir().join(format!("bsan-libarchive-{tag}-{}", std::process::id()));
++    let _ = std::fs::remove_dir_all(&p);
++    std::fs::create_dir_all(&p).unwrap();
++    let f = std::fs::File::open(&p).unwrap();
++    (p, f)
++}
++
++fn fd(f: &std::fs::File) -> bun_sys::Fd {
++    bun_sys::Fd::from_native(f.as_raw_fd())
++}
++
++/// install/extract_tarball.rs, npm registry tarballs: depth 1, regular files only.
++#[test]
++fn bun_install_npm_extract() {
++    for (tag, tar) in [("pax", PAX), ("gnu", GNU), ("tgz", PAX_TGZ)] {
++        let (p, dir) = tmpdir(tag);
++        let n = Archiver::extract_to_dir(tar, fd(&dir), None, &mut (), ExtractOptions { depth_to_skip: 1, npm: true, ..Default::default() })
++            .unwrap_or_else(|e| panic!("{tag}: {e:?}"));
++        assert!(n > 0, "{tag}");
++        assert_eq!(std::fs::read(p.join("package.json")).unwrap(), b"{\"name\":\"bsan-fixture\",\"version\":\"1.0.0\"}\n");
++        assert_eq!(std::fs::read(p.join("big.bin")).unwrap().len(), 300_000);
++        assert!(!p.parent().unwrap().join("escape.js").exists());
++        let _ = std::fs::remove_dir_all(&p);
++    }
++}
++
++/// install/extract_tarball.rs, GitHub tarballs: depth 1, all kinds, first-dirname callback.
++#[test]
++fn bun_install_github_extract() {
++    struct DirnameReader { needs: bool, got: Vec<u8> }
++    impl ArchiveAppender for DirnameReader {
++        const HAS_ON_FIRST_DIRECTORY_NAME: bool = true;
++        fn needs_first_dirname(&self) -> bool { self.needs }
++        fn on_first_directory_name(&mut self, name: &[u8]) { self.needs = false; self.got = name.to_vec(); }
++    }
++    for (tag, tar) in [("gh-pax", PAX), ("gh-gnu", GNU)] {
++        let (p, dir) = tmpdir(tag);
++        let mut r = DirnameReader { needs: true, got: Vec::new() };
++        let res = Archiver::extract_to_dir(tar, fd(&dir), None, &mut r, ExtractOptions { depth_to_skip: 1, ..Default::default() });
++        assert!(res.is_ok(), "{tag}: {res:?}");
++        assert_eq!(r.got, b"package");
++        assert!(p.join("lib/index.js").exists());
++        let _ = std::fs::remove_dir_all(&p);
++    }
++}
++
++/// cli/create_command.rs: overwrite-list scan before extracting a template.
++#[test]
++fn bun_create_overwrite_list() {
++    let (p, _dir) = tmpdir("create");
++    std::fs::create_dir_all(p.join("lib")).unwrap();
++    std::fs::write(p.join("package.json"), b"{}").unwrap();
++    std::fs::write(p.join("lib/index.js"), b"x").unwrap();
++    // Same appender as create_command.rs: hands back a view of one reused buffer.
++    struct OverwriteListAppender { buf: Vec<u8> }
++    impl ArchiveAppender for OverwriteListAppender {
++        fn append(&mut self, path: &[u8]) -> Result<&[u8], bun_libarchive::Error> {
++            self.buf.clear();
++            self.buf.extend_from_slice(path);
++            Ok(&self.buf)
++        }
++    }
++    let mut ctx = Context { pluckers: Vec::new(), overwrite_list: Default::default() };
++    let root = p.to_str().unwrap().as_bytes().to_vec();
++    Archiver::get_overwriting_file_list::<OverwriteListAppender, 1>(PAX, &root, &mut ctx, &mut OverwriteListAppender { buf: Vec::new() }).expect("scan");
++    assert!(ctx.overwrite_list.count() >= 2, "{}", ctx.overwrite_list.count());
++    let _ = std::fs::remove_dir_all(&p);
++}
++
++/// cli/publish_command.rs / pm_diff_command.rs: iterate entries and read file data.
++#[test]
++fn bun_publish_iterate_and_read() {
++    for tar in [PAX, GNU, PAX_TGZ] {
++        let mut it = match ArchiveIterator::init(tar) {
++            IteratorResult::Result(it) => it,
++            IteratorResult::Err { message, .. } => panic!("{}", String::from_utf8_lossy(message)),
++        };
++        let mut files = 0;
++        loop {
++            let next = match it.next() {
++                IteratorResult::Result(Some(n)) => n,
++                IteratorResult::Result(None) => break,
++                IteratorResult::Err { message, .. } => panic!("{}", String::from_utf8_lossy(message)),
++            };
++            let name = next.entry().pathname().as_bytes().to_vec();
++            if next.kind == bun_sys::FileKind::File {
++                match it.read_entry_data(&next).unwrap() {
++                    IteratorResult::Result(data) => assert_eq!(data.len() as i64, next.entry().size(), "{}", String::from_utf8_lossy(&name)),
++                    IteratorResult::Err { message, .. } => panic!("{}", String::from_utf8_lossy(message)),
++                }
++                files += 1;
++            }
++        }
++        assert!(files >= 8, "{files}");
++        assert!(matches!(it.close(), IteratorResult::Result(())));
++    }
++}
++
++#[test]
++fn truncated_and_corrupt_archives() {
++    for (tag, tar) in [("trunc", TRUNC), ("corrupt", CORRUPT)] {
++        let (p, dir) = tmpdir(tag);
++        let _ = Archiver::extract_to_dir(tar, fd(&dir), None, &mut (), ExtractOptions { depth_to_skip: 1, npm: true, ..Default::default() });
++        let _ = std::fs::remove_dir_all(&p);
++        if let IteratorResult::Result(mut it) = ArchiveIterator::init(tar) {
++            loop {
++                match it.next() {
++                    IteratorResult::Result(Some(n)) => { if n.kind == bun_sys::FileKind::File { let _ = it.read_entry_data(&n); } }
++                    _ => break,
++                }
++            }
++            let _ = it.close();
++        }
++    }
++}
+diff --git a/src/libarchive/tests/fixtures/corrupt.tar b/src/libarchive/tests/fixtures/corrupt.tar
+new file mode 100644
+index 0000000000000000000000000000000000000000..89499a309ddc982121587f37f2eab00bfb88731e
+GIT binary patch
+literal 327680
+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
+Sc_am%-4cO_iomZX`F{WcYE=sW
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/libarchive/tests/fixtures/gen.py b/src/libarchive/tests/fixtures/gen.py
+new file mode 100644
+index 00000000..f522b61a
+--- /dev/null
++++ b/src/libarchive/tests/fixtures/gen.py
+@@ -0,0 +1,42 @@
++#!/usr/bin/env python3
++"""Generates the tarball fixtures used by tests/bsan_drivers.rs (run from this directory)."""
++import gzip, io, tarfile
++
++def add(t, name, data=b"", type=tarfile.REGTYPE, linkname="", mode=0o644):
++    ti = tarfile.TarInfo(name); ti.type = type; ti.linkname = linkname; ti.mode = mode; ti.mtime = 1700000000
++    if type == tarfile.REGTYPE:
++        ti.size = len(data); t.addfile(ti, io.BytesIO(data))
++    else:
++        t.addfile(ti)
++
++def build(fmt):
++    b = io.BytesIO()
++    with tarfile.open(fileobj=b, mode="w", format=fmt) as t:
++        add(t, "package/", type=tarfile.DIRTYPE, mode=0o755)
++        add(t, "package/package.json", b'{"name":"bsan-fixture","version":"1.0.0"}\n')
++        add(t, "package/lib/index.js", b"module.exports = 42;\n" * 200)
++        add(t, "package/lib/empty.js", b"")
++        add(t, "package/" + "d" * 90 + "/" + "f" * 120 + ".js", b"long name\n")  # pax/GNU long name
++        add(t, "package/bin/cli", b"#!/usr/bin/env node\n", mode=0o755)
++        add(t, "package/big.bin", bytes((i * 7) & 0xff for i in range(300_000)))  # multi-block
++        add(t, "package/link-rel", type=tarfile.SYMTYPE, linkname="lib/index.js")
++        add(t, "package/link-escape", type=tarfile.SYMTYPE, linkname="../../../../etc/passwd")
++        add(t, "package/link-abs", type=tarfile.SYMTYPE, linkname="/etc/passwd")
++        add(t, "package/hard", type=tarfile.LNKTYPE, linkname="package/lib/index.js")
++        add(t, "package/../escape.js", b"traversal\n")
++        add(t, "/abs.js", b"absolute\n")
++        add(t, "package/./dot/../norm.js", b"normalize\n")
++        add(t, "package/café/snow ☃.js", b"utf8\n")
++        add(t, "package/fifo", type=tarfile.FIFOTYPE)
++    return b.getvalue()
++
++for fmt, name in [(tarfile.PAX_FORMAT, "pax"), (tarfile.GNU_FORMAT, "gnu")]:
++    data = build(fmt)
++    open(f"{name}.tar", "wb").write(data)
++    open(f"{name}.tgz", "wb").write(gzip.compress(data, 6, mtime=0))
++d = open("pax.tar", "rb").read()
++open("truncated.tar", "wb").write(d[: len(d) // 3 + 100])
++c = bytearray(d)
++for i in range(600, len(c), 997):
++    c[i] ^= 0xFF
++open("corrupt.tar", "wb").write(bytes(c))
+diff --git a/src/libarchive/tests/fixtures/gnu.tar b/src/libarchive/tests/fixtures/gnu.tar
+new file mode 100644
+index 0000000000000000000000000000000000000000..11919e8c062bbd9c36b6b9729dcaf1e47c12ec45
+GIT binary patch
+literal 327680
+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
+SKm<fU1VlgtMBvg9f&T)_(j12X
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/libarchive/tests/fixtures/gnu.tgz b/src/libarchive/tests/fixtures/gnu.tgz
+new file mode 100644
+index 0000000000000000000000000000000000000000..de73bcb34f27df67697d424621a0a3f9132ae9ee
+GIT binary patch
+literal 2356
+zcmeIz`&W{80LO9GO|vb}juyvkP*Ry!Dvnu3J(*UTHmlRpoJko|=OxSwDuPdCHnT(I
+zQEVhZJEPQYEX1@@sByBqa;U((VU}fHfC!Dt1J8H+VZZF`57;lh|AWu#mk<7eGv-p6
+zJPiYM{R?vmdEYsGVtDz@@vXa-^pUYb(jI+rL8yC`;<ynrZ~p#Tos?R$CMYt0QCVGC
+z9Uu3G@rH%LopLEJcPYp!$S(ZK_f0@SwoAt<j{d~tj$!?zC}P`iula@}NK6viKO;)&
+zi}R_e{>#`oET1(I2Libv1FIUEt{N0cJ{14UB}ui3f$k<2@4ywOpsVf4erePVL$B4W
+z^=|oQpwFZqZb+;#u%w>keg4`U5M|{#TotF8^+dNW^Xc0GTeTnzNmmsN%EQ1>(#-&m
+z`sl_ro+km_(fMvy!vXPXxpPD4#*a{jY6revR55N9A6k&Z?av}}Z(~fYoFXAu=N$E9
+z%1T@vb;fGg(Ke~5RB!T(+55`#PI7W>^m_R_ubuzy>CD=|Y1ZPyMVc0X<-|xA>unBs
+zBNKHycU^+OM<O>~?$)(P6FrZ_*R!unIYl3ln<&=hy@$AT#oEhGXJlP3sxGGNVzhvl
+zCWs%OO;}Xren^5)9;(3RUXZ03lb5ce{DJ1LR#V57QfLmnR8z?lfG2wbf)CyiNjRGU
+z@TTzd9N4et%{L9R{k0*%eHpp^_}=Q2w3%amp~RnN?40CEY^X2N++>1(6(#T;D3J$`
+z0X?;Z9Sr~ZHdCP!HXs6I`MNk>obeoiQ)osYM#p%H5Ya^iI;>(Cez!NDoT?(=&7#^s
+zAH8J|+mb7feWw1flExS?dSA7lS29QVG?w9)*o3?xAzC~M<85W#xM47T%|10$t#5^M
+z_pz+UXq#<E49N3Z2-frxn=RfDqBfkc^vdzgBR4oh6Fvh==&#>fiGAkBBlp^#(8v?b
+zZji<Jvd7*LEJsQ@;X)lA&^uwAMD=^qAfsmR@%N8psp41}UAoa~BWR61Ts-<}Og7zU
+zBHD~GVyljV79w+T_uG#PETbu-!UrZCvDkX+Ty^V-iBC;9MBvJtdPS1i*#;(%Q0yOE
+z;Z|#p6J+22BUMlxuywMK$n5h=ByG@!On1|ukygBIG(~Pvn*!}BZY%|i!Gmqe*=7Z1
+z1!e{QX8{;|Hg{M2bF1n-nHiCUyFD|OnaE4jYjIN<m0eo8%=N-`=Dmc)<vK>(bEi^S
+zv@G7E>xVRj@gV&$i9I(xMbcNkj29gbqcVYqgHscx3MU(oI5X-Eos9$yeS<f}%|TT)
+zWmmeFC`?6JHu*!KI_i7;KF)-9?{~!98BY%fTO82ZG|`vk;@zP0{b^Zrv+XHQTeux;
+zi8)zRs=JN)ke}v!fx46va9jjVu<!%2T~m!Sz_-2);COb|Jxu+L6TZ~z!6;w&R-Naa
+zql7o*pe5O_Whe=Zd;bi#hV+%QVOp}<3I!+78pU(cX4))dqVr@is&op~+VcrI`fhc{
+z%B82YUDI~godhiZO1fskZ$s~0a#At&)PrHbMaNKz>?r!EqFwX+%Px67X)7RbD;V*A
+j4@IERZ4p}FD$3iQe&g8~CH%jkARAle^$iPynUDDk*Ka&=
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/libarchive/tests/fixtures/pax.tar b/src/libarchive/tests/fixtures/pax.tar
+new file mode 100644
+index 0000000000000000000000000000000000000000..b27756effba4fd31f925b19545d9d70fa9ef59aa
+GIT binary patch
+literal 327680
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/libarchive/tests/fixtures/pax.tgz b/src/libarchive/tests/fixtures/pax.tgz
+new file mode 100644
+index 0000000000000000000000000000000000000000..a46c77e0212b952ba41f63708d0f1f22f2dc27f7
+GIT binary patch
+literal 2407
+zcmeIu>sQiu0LO7pJ4V*hPAe;8QETOCW>}^sLm94eMnvgR^U|>yh?i2ymIn|yWzA+8
+z9j%<1vdw9cDPEYSh`)w2HRi!vCZUjdLlDs9lHl+6U61x)|G=L3e)M_xIWNr3RStJ<
+zK*<h3{|1%5Gja<mePB!@$$8h?9U`u}w_*M5ueU$%<EdnCqV1R5NkIk1yVrVyT%0}+
+zGVU^|*cyq|jb)V79L}Pb#NwOhU+%EMo!(W<p$~crzs(xqky)S^?aqpR@Nz%#esskF
+zTtXBF9pF5EY{TnhBHm5dK|C1#c!C*9ikdYSrut4En!;_Z%wWM3f@`MvO|`k~-08Q;
+zXv{O@ULp-{uZ^xgzVSt9p_35Q4OCNilm^DLDvLzEa-WrOM=FjpY$_8eQ$#TetTg`Q
+zr<FXVsE_^?lPUlu`Ng5-;S`i&b*(DnArs^hPdg!xK>K%qw{wl&7Vqs@nR7y{G;VC%
+z@J`c3Ub)uoU}Ent#GHQzYX7r7tN+BUh9xAfrFRAsV6k)Qb1-Fdgv<c)cXfo;i7o^m
+z7%tmw7L~}+sK@p;Takx{dJS>&;qRGGyt<|@MI=adn0w_x?lZ=bdeOSU3{p~RPJw5V
+zh5rc^O^eHbT_QOk#<~1~nY%ZsF=pZVSmbjY^^1l<;GG|l)Trp9-Sz>%JumVMpvjIz
+zeLSAKEi`)ehu}#{410C;<<VnaAqq8E=$Iwnk)i30AU7&`UMuG+2J~RO+i~AzMHQMQ
+znVYNjgY>0Fp8?G*r+4Qz>jb^+?WB++6B9oCB<JeI1mqP4Fv`e9t<qP*Kl}sV?`|4l
+zG}$YARQp{xrg6UI;U?()+BB{@I1sK#%La4^mO*lEpDdPXYa!~7`iXl=4aKwPjsAu)
+zcl^wjj|WmzOEqBxq*<6f9SkkCtL2<uNwG-sYy8u!zw(>ZNR3rsG;D+K1ecly>5yil
+zkgH@9mIT=BaS<Pxk^`Lj$UaWRw>4o;QvJ0<nXR4hbj(c`JW@x&FEX(lbBSv43Xfy)
+zP$Og5Y|xZ(X6{{)SnE@R89l4?OwBA}%MGmOZ~x@s=l952V|#>b9Xrs}jm?7DghewS
+zVXD@|Y4fh9Z1V7HovAjYTkSobCLU+_T-lsyx@{snEvwT`uoYvuIurqn#w{+lEU+xF
+zEbxB|$fFQ}Pk%^4ru#yYK#{0djgU)H0>IhzRKbgR&CfJ5!*uAD$EnyV$N6;p-e3mv
+z$vU5{-W5ly%AE7WEat;uubYzW{+<)Ngb>$Po@aX`QT$$5V@J~^2&2L+!Hjh!*|YnR
+z^MXPXi>=eKFKQtO={~;i!sT@^X7ER|yjmms4Jo%7kGC{SUZDB_u^AV>$_n`}C{cr4
+z(|VW4;XW<Doz$8Dw<m_f4SwI?!#9)2yIT=BwccHCDVVCv5ByAV<8FNbp|eVNYRCZ6
+zX@D*Ub2bW?=09E1PsI~nA%(>pJ6E7GxCmE7>kU#Ib`_licvlbggYmA~k&p()EyuG5
+z!v4l_mA9$20c35GAK%}(*J`&DQY@2v#~iO4^`xuP?fikLVkaZG7_0dbE{(ZwxuT#N
+z2E&d?BG_qTqC%eBcZE*skCSQJ%n(i8V!)t=+CW$oya>6jv;YRRj*$7xl|QoA3}VmK
+ol)gr%Sb^3K5$^^_PWI@o-KR_KafkmK!d<|Wb3c$B92_0~0al1C8UO$Q
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/libarchive/tests/fixtures/truncated.tar b/src/libarchive/tests/fixtures/truncated.tar
+new file mode 100644
+index 0000000000000000000000000000000000000000..515a961370c1471d39e5097390e45935ecd1ea40
+GIT binary patch
+literal 109326
+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
+Y^WXXJ{P&X5zWoLa<iGRZ`R}9t0uL5loB#j-
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/libdeflate_sys/tests/bsan_drivers.rs b/src/libdeflate_sys/tests/bsan_drivers.rs
+new file mode 100644
+index 00000000..0090832e
+--- /dev/null
++++ b/src/libdeflate_sys/tests/bsan_drivers.rs
+@@ -0,0 +1,49 @@
++//! BorrowSanitizer drivers for bun_libdeflate_sys (instrumented libdeflate). Not part of Bun's suite.
++use bun_libdeflate_sys::libdeflate::{Encoding, OwnedCompressor, OwnedDecompressor, Status};
++
++fn payload(n: usize) -> Vec<u8> {
++    (0..n).map(|i| (b"libdeflate bun sanitizer "[i % 25]).wrapping_add((i / 997) as u8)).collect()
++}
++
++/// http/compress_body.rs (libdeflate fast path) and Bun.gzipSync with libdeflate.
++#[test]
++fn roundtrip_all_encodings() {
++    bun_libdeflate_sys::libdeflate::load();
++    let input = payload(40_000);
++    for level in [1, 6, 12] {
++        let mut comp = OwnedCompressor::new(level).unwrap();
++        let mut dec = OwnedDecompressor::new().unwrap();
++        for enc in [Encoding::Deflate, Encoding::Zlib, Encoding::Gzip] {
++            let mut out = Vec::new();
++            let r = comp.compress_to_vec(&input, &mut out, enc).unwrap();
++            assert!(r.status == Status::Success);
++            let mut fixed = vec![0u8; comp.max_bytes_needed(&input, enc)];
++            let r2 = comp.compress(&input, &mut fixed, enc);
++            assert!(r2.status == Status::Success);
++            assert_eq!(&fixed[..r2.written], &out[..]);
++            // Exact-size output, then the doubling retry from a tiny buffer.
++            let mut plain = Vec::with_capacity(input.len());
++            assert!(dec.decompress_to_vec(&out, &mut plain, enc).status == Status::Success);
++            assert_eq!(plain, input);
++            let mut grown = Vec::with_capacity(16);
++            let r = dec.decompress_to_vec_grow(&out, &mut grown, enc, 1 << 20).unwrap();
++            assert!(r.status == Status::Success);
++            assert_eq!(grown, input);
++        }
++    }
++}
++
++#[test]
++fn bad_data_and_short_output() {
++    let input = payload(20_000);
++    let mut comp = OwnedCompressor::new(6).unwrap();
++    let mut dec = OwnedDecompressor::new().unwrap();
++    let mut out = Vec::new();
++    comp.compress_to_vec(&input, &mut out, Encoding::Gzip).unwrap();
++    let mut small = vec![0u8; 100];
++    assert!(dec.decompress(&out, &mut small, Encoding::Gzip).status != Status::Success);
++    let mut bad = out.clone();
++    for b in bad.iter_mut().skip(10).step_by(3) { *b ^= 0x77; }
++    let mut plain = Vec::with_capacity(input.len());
++    assert!(dec.decompress_to_vec(&bad, &mut plain, Encoding::Gzip).status != Status::Success);
++}
+diff --git a/src/picohttp/tests/bsan_drivers.rs b/src/picohttp/tests/bsan_drivers.rs
+new file mode 100644
+index 00000000..198313a6
+--- /dev/null
++++ b/src/picohttp/tests/bsan_drivers.rs
+@@ -0,0 +1,56 @@
++//! BorrowSanitizer drivers for bun_picohttp (instrumented picohttpparser). Not part of Bun's suite.
++use bun_picohttp::{phr_chunked_decoder, phr_decode_chunked, Header, ParseResponseError, Response};
++
++const RESP: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nX-Bun: borrow-sanitizer\r\nSet-Cookie: a=b; Path=/\r\nTransfer-Encoding: chunked\r\n\r\nbody";
++
++/// http/lib.rs handle_on_data_headers: parse_parts into a shared header array, incremental.
++#[test]
++fn parse_response_incremental() {
++    let mut headers = [Header::ZERO; 64];
++    for cut in 16..RESP.len() {
++        let mut amount_read = 0usize;
++        match Response::parse_parts(&RESP[..cut], &mut headers, Some(&mut amount_read)) {
++            Ok(r) => {
++                assert_eq!(r.status_code, 200);
++                assert_eq!(r.status, b"OK");
++                assert_eq!(r.headers.get(b"x-bun"), Some(&b"borrow-sanitizer"[..]));
++                assert_eq!(&RESP[r.bytes_read..cut], &b"body"[..cut - r.bytes_read]);
++            }
++            Err(ParseResponseError::ShortRead) => {}
++            Err(e) => panic!("cut={cut}: {e:?}"),
++        }
++    }
++}
++
++#[test]
++fn parse_response_errors_and_limits() {
++    let mut few = [Header::ZERO; 2];
++    assert!(Response::parse(RESP, &mut few).is_err());
++    let mut headers = [Header::ZERO; 8];
++    assert!(Response::parse(b"HTTP/1.1 200 OK\r\nA: b\r\n continued\r\n\r\n", &mut headers).is_err());
++    assert!(Response::parse(b"HTTX/1.1 200 OK\r\n\r\n", &mut headers).is_err());
++}
++
++/// http/lib.rs chunked body decoding: in-place phr_decode_chunked across packets.
++#[test]
++fn chunked_decode_multi_packet() {
++    let wire: &[u8] = b"5\r\nhello\r\n1a;ext=1\r\nabcdefghijklmnopqrstuvwxyz\r\n0\r\nTrailer: x\r\n\r\n";
++    for split in 1..wire.len() {
++        let mut dec: phr_chunked_decoder = unsafe { core::mem::zeroed() };
++        dec.consume_trailer = 1;
++        let mut body: Vec<u8> = Vec::new();
++        let mut done = false;
++        for part in [&wire[..split], &wire[split..]] {
++            let start = body.len();
++            body.extend_from_slice(part);
++            let mut n = part.len();
++            // SAFETY: body[start..] is initialized and exclusively borrowed.
++            let ret = unsafe { phr_decode_chunked(&raw mut dec, body.as_mut_ptr().add(start), &raw mut n) };
++            body.truncate(start + n);
++            assert!(ret != -1, "split={split}");
++            if ret >= 0 { done = true; }
++        }
++        assert!(done, "split={split}");
++        assert_eq!(body, b"helloabcdefghijklmnopqrstuvwxyz");
++    }
++}
+diff --git a/src/zlib/tests/bsan_drivers.rs b/src/zlib/tests/bsan_drivers.rs
+new file mode 100644
+index 00000000..eb18ab68
+--- /dev/null
++++ b/src/zlib/tests/bsan_drivers.rs
+@@ -0,0 +1,283 @@
++//! BorrowSanitizer drivers for bun_zlib. Each test mirrors a production caller's use of the
++//! wrapper (parameters copied from the call site named in its doc comment) so the unsafe FFI
++//! paths run against an instrumented zlib-ng. Not part of Bun's suite.
++use bun_zlib::{
++    DeflateEncoder, FlushValue, InflateDecoder, Options, ReturnCode, ZlibCompressorArrayList,
++    ZlibError, ZlibReaderArrayList,
++};
++
++/// Compressible but non-trivial payload (exercises deflate_medium/slow and match finding).
++fn payload(n: usize) -> Vec<u8> {
++    let words: [&[u8]; 6] = [b"bun ", b"borrow ", b"sanitizer ", b"zlib ", b"deflate ", b"\x00\xff"];
++    let mut v = Vec::with_capacity(n);
++    let mut x: u32 = 0x12345678;
++    while v.len() < n {
++        x ^= x << 13;
++        x ^= x >> 17;
++        x ^= x << 5;
++        v.extend_from_slice(words[(x % 6) as usize]);
++        if x % 7 == 0 {
++            v.push((x >> 8) as u8);
++        }
++    }
++    v.truncate(n);
++    v
++}
++
++/// zlib-format fixture from zlib's own one-shot `compress2` (no Rust-side z_stream), so inflate
++/// paths can be driven independently of the DeflateEncoder/ZlibCompressorArrayList findings.
++fn fixture_zlib(input: &[u8], level: i32) -> Vec<u8> {
++    let mut dest = vec![0u8; input.len() + input.len() / 1000 + 64];
++    let mut dest_len = dest.len() as bun_zlib::uLongf;
++    // SAFETY: dest/input valid for their lengths; compress2 writes at most dest_len bytes.
++    let rc = unsafe {
++        bun_zlib::compress2(dest.as_mut_ptr(), &mut dest_len, input.as_ptr(), input.len() as _, level)
++    };
++    assert_eq!(rc, 0, "compress2");
++    dest.truncate(dest_len as usize);
++    dest
++}
++/// Raw deflate: strip the 2-byte zlib header and 4-byte adler32 trailer.
++fn fixture_raw(input: &[u8], level: i32) -> Vec<u8> {
++    let z = fixture_zlib(input, level);
++    z[2..z.len() - 4].to_vec()
++}
++/// gzip member (RFC 1952) around a raw deflate stream.
++fn fixture_gzip(input: &[u8], level: i32) -> Vec<u8> {
++    let mut g = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff];
++    g.extend(fixture_raw(input, level));
++    g.extend(bun_zlib::crc32_bytes(0, input).to_le_bytes());
++    g.extend((input.len() as u32).to_le_bytes());
++    g
++}
++
++/// http/compress_body.rs `compress_zlib_streaming`: one-shot `step(.., Finish)` loop.
++fn http_compress(input: &[u8], gzip: bool, level: i32) -> Vec<u8> {
++    let window_bits = if gzip { 15 + 16 } else { 15 };
++    let mut encoder = DeflateEncoder::new(level, window_bits, 8, 0).expect("deflateInit2");
++    let mut out = Vec::new();
++    let mut remaining = input;
++    loop {
++        let reserve = if out.capacity() == out.len() { 64 * 1024 } else { 0 };
++        let (consumed, rc) = encoder.step(remaining, &mut out, reserve, FlushValue::Finish);
++        remaining = &remaining[consumed..];
++        match rc {
++            ReturnCode::StreamEnd => return out,
++            ReturnCode::Ok => continue,
++            rc => panic!("deflate failed: {rc:?}"),
++        }
++    }
++}
++
++/// http/Decompressor.rs: InflateDecoder fed one body chunk at a time.
++fn http_decompress(compressed: &[u8], window_bits: i32, chunk: usize) -> Vec<u8> {
++    let mut dec = InflateDecoder::new(window_bits).expect("inflateInit2");
++    let mut out = Vec::new();
++    let chunks: Vec<&[u8]> = compressed.chunks(chunk).collect();
++    for (i, c) in chunks.iter().enumerate() {
++        let is_done = i + 1 == chunks.len();
++        match dec.decompress(c, &mut out, usize::MAX, is_done) {
++            Ok(_) | Err(ZlibError::ShortRead) => {}
++            Err(e) => panic!("inflate failed: {e:?}"),
++        }
++    }
++    out
++}
++
++#[test]
++fn http_body_deflate_roundtrip() {
++    let input = payload(200_000);
++    for level in [1, 6, 9] {
++        let z = http_compress(&input, false, level);
++        assert_eq!(http_decompress(&z, 15, 1500), input);
++    }
++}
++
++#[test]
++fn http_body_gzip_roundtrip_and_store() {
++    let input = payload(70_000);
++    let gz = http_compress(&input, true, 6);
++    assert_eq!(http_decompress(&gz, 15 + 16, 997), input);
++    // Level 0 → deflate_stored, which writes `s->strm->next_out` directly.
++    let stored = http_compress(&input, true, 0);
++    assert_eq!(http_decompress(&stored, 15 + 32, 4096), input);
++}
++
++#[test]
++fn gzip_multi_member_body() {
++    let a = payload(5000);
++    let b = payload(9000);
++    let mut body = http_compress(&a, true, 6);
++    body.extend(http_compress(&b, true, 6));
++    let mut expected = a.clone();
++    expected.extend(&b);
++    assert_eq!(http_decompress(&body, 15 + 16, 333), expected);
++}
++
++/// http_jsc/websocket_client/WebSocketDeflate.rs: permessage-deflate with context takeover —
++/// one raw-deflate encoder reused across messages with SyncFlush, one raw inflater.
++#[test]
++fn websocket_permessage_deflate_context_takeover() {
++    const COMPRESSION_BUFFER_SIZE: usize = 4096;
++    let mut enc = DeflateEncoder::new(-1, -15, 8, 0).expect("deflateInit2");
++    let mut dec = InflateDecoder::new(-15).expect("inflateInit2");
++    for msg_no in 0..8 {
++        let msg = payload(1000 + msg_no * 3000);
++        let mut out = Vec::new();
++        let mut remaining: &[u8] = &msg;
++        loop {
++            let (consumed, rc) =
++                enc.step(remaining, &mut out, COMPRESSION_BUFFER_SIZE, FlushValue::SyncFlush);
++            remaining = &remaining[consumed..];
++            assert!(matches!(rc, ReturnCode::Ok | ReturnCode::BufError), "{rc:?}");
++            if remaining.is_empty() && enc.avail_out() > 0 {
++                break;
++            }
++        }
++        // RFC 7692 §7.2.1: strip the trailing 00 00 ff ff, re-append before inflating.
++        assert!(out.ends_with(&[0, 0, 0xff, 0xff]));
++        out.truncate(out.len() - 4);
++        let mut wire = out.clone();
++        wire.extend_from_slice(&[0, 0, 0xff, 0xff]);
++        let mut plain = Vec::new();
++        let mut remaining: &[u8] = &wire;
++        loop {
++            let (consumed, rc) =
++                dec.step(remaining, &mut plain, COMPRESSION_BUFFER_SIZE, FlushValue::NoFlush);
++            remaining = &remaining[consumed..];
++            match rc {
++                ReturnCode::Ok if remaining.is_empty() && dec.avail_out() > 0 => break,
++                ReturnCode::Ok => continue,
++                ReturnCode::BufError => break,
++                rc => panic!("inflate failed: {rc:?}"),
++            }
++        }
++        assert_eq!(plain, msg);
++    }
++    assert_eq!(enc.reset(), ReturnCode::Ok);
++}
++
++/// runtime/api/BunObject.rs Bun.deflateSync/gzipSync (ZlibCompressorArrayList) and
++/// Bun.inflateSync/gunzipSync (ZlibReaderArrayList), including the caller's pre-reserve.
++#[test]
++fn bun_sync_apis_roundtrip() {
++    let input = payload(123_456);
++    for gzip in [false, true] {
++        let mut compressed = Vec::new();
++        let opts = Options { gzip, ..Default::default() };
++        let mut c = ZlibCompressorArrayList::init(&input, &mut compressed, opts).expect("init");
++        c.read_all().expect("deflate");
++        drop(c);
++        assert!(!compressed.is_empty());
++
++        let mut list = Vec::new();
++        list.try_reserve_exact(compressed.len().max(32)).unwrap();
++        let window_bits = if gzip { 15 + 16 } else { -15 };
++        let opts = Options { window_bits, ..Default::default() };
++        let mut r = ZlibReaderArrayList::init_with_options(&compressed, &mut list, opts).expect("init");
++        r.read_all(true).expect("inflate");
++        drop(r);
++        assert_eq!(list, input);
++    }
++}
++
++/// StandaloneModuleGraph / `bun create`: ZlibReaderArrayList::init (auto-detect header) on
++/// truncated and corrupt input must error cleanly.
++#[test]
++fn reader_truncated_and_corrupt() {
++    let input = payload(50_000);
++    let gz = http_compress(&input, true, 6);
++    let mut list = Vec::with_capacity(16384);
++    let mut r = ZlibReaderArrayList::init(&gz[..gz.len() / 2], &mut list).expect("init");
++    assert!(r.read_all(true).is_err());
++    drop(r);
++
++    let mut bad = gz.clone();
++    for b in bad.iter_mut().skip(20).step_by(7) {
++        *b ^= 0x5a;
++    }
++    let mut list = Vec::with_capacity(16384);
++    let mut r = ZlibReaderArrayList::init(&bad, &mut list).expect("init");
++    let res = r.read_all(true);
++    assert!(res.is_err());
++    let _ = r.error_message();
++}
++
++#[test]
++fn crc32_matches_reference() {
++    assert_eq!(bun_zlib::crc32_bytes(0, b"123456789"), 0xCBF4_3926);
++}
++
++// ── inflate paths, driven with compress2 fixtures ─────────────────────────────
++
++#[test]
++fn inflate_http_body_zlib_and_gzip() {
++    let input = payload(200_000);
++    assert_eq!(http_decompress(&fixture_zlib(&input, 6), 15, 1500), input);
++    assert_eq!(http_decompress(&fixture_gzip(&input, 9), 15 + 16, 997), input);
++    assert_eq!(http_decompress(&fixture_gzip(&input, 0), 15 + 32, 4096), input);
++}
++
++#[test]
++fn inflate_gzip_multi_member_split_at_boundary() {
++    let a = payload(5000);
++    let b = payload(9000);
++    let ga = fixture_gzip(&a, 6);
++    let gb = fixture_gzip(&b, 1);
++    let mut body = ga.clone();
++    body.extend(&gb);
++    let mut expected = a.clone();
++    expected.extend(&b);
++    assert_eq!(http_decompress(&body, 15 + 16, 333), expected);
++    // Member boundary exactly at a chunk boundary (the State::End resume path).
++    assert_eq!(http_decompress(&body, 15 + 16, ga.len()), expected);
++}
++
++#[test]
++fn inflate_websocket_raw_messages() {
++    let mut dec = InflateDecoder::new(-15).expect("inflateInit2");
++    for msg_no in 0..6 {
++        let msg = payload(700 + msg_no * 2500);
++        let wire = fixture_raw(&msg, 6);
++        let mut plain = Vec::new();
++        let mut remaining: &[u8] = &wire;
++        loop {
++            let (consumed, rc) = dec.step(remaining, &mut plain, 4096, FlushValue::NoFlush);
++            remaining = &remaining[consumed..];
++            match rc {
++                ReturnCode::StreamEnd => break,
++                ReturnCode::Ok => continue,
++                rc => panic!("inflate failed: {rc:?}"),
++            }
++        }
++        assert_eq!(plain, msg);
++        assert_eq!(dec.reset(), ReturnCode::Ok);
++    }
++}
++
++#[test]
++fn inflate_sync_reader_and_errors() {
++    let input = payload(123_456);
++    for (fx, wb) in [(fixture_zlib(&input, 6), 15), (fixture_gzip(&input, 6), 15 + 16), (fixture_raw(&input, 6), -15)] {
++        let mut list = Vec::new();
++        list.try_reserve_exact(fx.len().max(32)).unwrap();
++        let opts = Options { window_bits: wb, ..Default::default() };
++        let mut r = ZlibReaderArrayList::init_with_options(&fx, &mut list, opts).expect("init");
++        r.read_all(true).expect("inflate");
++        drop(r);
++        assert_eq!(list, input);
++    }
++    let gz = fixture_gzip(&input, 6);
++    let mut list = Vec::with_capacity(16384);
++    let mut r = ZlibReaderArrayList::init(&gz[..gz.len() / 2], &mut list).expect("init");
++    assert!(r.read_all(true).is_err());
++    drop(r);
++    let mut bad = gz.clone();
++    for b in bad.iter_mut().skip(20).step_by(7) {
++        *b ^= 0x5a;
++    }
++    let mut list = Vec::with_capacity(16384);
++    let mut r = ZlibReaderArrayList::init(&bad, &mut list).expect("init");
++    assert!(r.read_all(true).is_err());
++    let _ = r.error_message();
++}
+diff --git a/src/zstd/tests/bsan_drivers.rs b/src/zstd/tests/bsan_drivers.rs
+new file mode 100644
+index 00000000..3fc78ea2
+--- /dev/null
++++ b/src/zstd/tests/bsan_drivers.rs
+@@ -0,0 +1,89 @@
++//! BorrowSanitizer drivers for bun_zstd (instrumented libzstd). Not part of Bun's suite.
++use bun_zstd::{StreamingDecoder, ZstdError};
++
++fn payload(n: usize) -> Vec<u8> {
++    let mut v = Vec::with_capacity(n);
++    let mut x: u32 = 0x9e3779b9;
++    while v.len() < n {
++        x ^= x << 13; x ^= x >> 17; x ^= x << 5;
++        v.extend_from_slice(match x % 4 { 0 => &b"bun zstd "[..], 1 => b"borrow ", 2 => b"\x00\x01\x02", _ => b"sanitizer\n" });
++    }
++    v.truncate(n);
++    v
++}
++
++fn compress(input: &[u8], level: i32) -> Vec<u8> {
++    let mut out = Vec::with_capacity(bun_zstd::compress_bound(input.len()));
++    match bun_zstd::compress_append(&mut out, input, Some(level)) {
++        bun_zstd::Result::Success(n) => assert_eq!(n, out.len()),
++        bun_zstd::Result::Err(e) => panic!("compress: {}", String::from_utf8_lossy(e.as_bytes())),
++    }
++    out
++}
++
++/// Bun.zstdCompressSync / zstdDecompressSync: compress_append + decompress_alloc (known size).
++#[test]
++fn sync_roundtrip_known_size() {
++    let input = payload(40_000);
++    for level in [1, 3, 19] {
++        let c = compress(&input, level);
++        assert_eq!(bun_zstd::decompress_alloc(&c).unwrap(), input);
++    }
++    let mut dest = vec![0u8; bun_zstd::compress_bound(input.len())];
++    match bun_zstd::compress(&mut dest, &input, None) {
++        bun_zstd::Result::Success(n) => assert_eq!(bun_zstd::decompress_alloc(&dest[..n]).unwrap(), input),
++        bun_zstd::Result::Err(e) => panic!("{}", String::from_utf8_lossy(e.as_bytes())),
++    }
++}
++
++/// Unknown content size → decompress_alloc's ZstdReaderArrayList streaming path. A frame
++/// produced by the streaming decoder's peer (HTTP `Content-Encoding: zstd`) has no size; build
++/// one by concatenating two frames (findDecompressedSize sums them) and one skippable frame.
++#[test]
++fn sync_multi_frame_and_skippable() {
++    let a = payload(9_000);
++    let b = payload(13_000);
++    let mut c = compress(&a, 3);
++    // Skippable frame (magic 0x184D2A50, 4-byte LE length, payload).
++    c.extend_from_slice(&[0x50, 0x2a, 0x4d, 0x18, 3, 0, 0, 0, 1, 2, 3]);
++    c.extend(compress(&b, 3));
++    let mut expected = a.clone();
++    expected.extend(&b);
++    assert_eq!(bun_zstd::decompress_alloc(&c).unwrap(), expected);
++}
++
++/// http/Decompressor.rs: StreamingDecoder fed per body chunk, with a max_output window.
++#[test]
++fn http_streaming_chunks() {
++    let input = payload(60_000);
++    let c = compress(&input, 5);
++    for chunk in [1usize, 7, 512, 4096] {
++        let mut dec = StreamingDecoder::new().unwrap();
++        let mut out = Vec::new();
++        let chunks: Vec<&[u8]> = c.chunks(chunk).collect();
++        for (i, ch) in chunks.iter().enumerate() {
++            let mut rest: &[u8] = ch;
++            loop {
++                let max = out.len() + 8192;
++                match dec.decompress(rest, &mut out, max, i + 1 == chunks.len()) {
++                    Ok(n) => { rest = &rest[n..]; if rest.is_empty() { break; } }
++                    Err(ZstdError::ShortRead) => break,
++                    Err(e) => panic!("chunk={chunk}: {e:?}"),
++                }
++            }
++        }
++        assert_eq!(out, input, "chunk={chunk}");
++    }
++}
++
++#[test]
++fn corrupt_and_truncated() {
++    let c = compress(&payload(20_000), 3);
++    assert!(bun_zstd::decompress_alloc(&c[..c.len() / 2]).is_err());
++    let mut bad = c.clone();
++    for b in bad.iter_mut().skip(12).step_by(5) { *b ^= 0xa5; }
++    assert!(bun_zstd::decompress_alloc(&bad).is_err());
++    let mut dec = StreamingDecoder::new().unwrap();
++    let mut out = Vec::new();
++    assert!(dec.decompress(&bad, &mut out, usize::MAX, true).is_err());
++}

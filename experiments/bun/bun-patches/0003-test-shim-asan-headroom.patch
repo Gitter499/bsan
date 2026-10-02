@@ -1,0 +1,16 @@
+diff --git a/src/parsers/native_test_shims.rs b/src/parsers/native_test_shims.rs
+index e5c77c47..e807e8c8 100644
+--- a/src/parsers/native_test_shims.rs
++++ b/src/parsers/native_test_shims.rs
+@@ -5,7 +5,10 @@
+ extern "C" fn Bun__StackCheck__getMaxStack() -> *mut core::ffi::c_void {
+     let probe: u8 = 0;
+     let approx_sp = (&raw const probe) as usize;
+-    (approx_sp.saturating_sub(512 * 1024)) as *mut core::ffi::c_void
++    // bsan harness: StackCheck::THRESHOLD grows by 384 KB under `bun_asan`; keep the fake limit
++    // below it (run with RUST_MIN_STACK large enough for the extra headroom).
++    let headroom = if cfg!(bun_asan) { 4 * 1024 * 1024 } else { 512 * 1024 };
++    (approx_sp.saturating_sub(headroom)) as *mut core::ffi::c_void
+ }
+ 
+ #[unsafe(no_mangle)]

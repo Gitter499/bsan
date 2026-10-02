@@ -112,6 +112,54 @@ options the WebSocket permessage-deflate driver, which reports on unpatched
 code, passes too. `cargo clippy -p bun_zlib --no-deps` (Bun's lint config,
 including `undocumented_unsafe_blocks`) is clean.
 
+### Bun bug: `bun_ast` `new_store!` caches `current` from a `Box` before moving it (Tree Borrows UB)
+
+**Status: confirmed** — found independently by the runtime run
+([`jsc/`](jsc/REPORT.md), on every `bun-debug` startup) and by Bun's own
+`bun_parsers` unit tests under BSan (21 of 38 tests report it); reproduced by
+a Miri replica; the fix makes the replica clean.
+
+`Store::allocate` (`src/ast/new_store.rs`, the arena behind every
+`Expr`/`Stmt` store) does
+
+```rust
+let mut first = Block::new_boxed();
+store.current = &raw mut *first;   // raw pointer from the Box's current tag
+store.head = Some(first);          // moving the Box retags it
+```
+
+and the overflow path does the same with `*slot = Some(new_block)`. Every
+payload is then written through `current` (a pointer derived *before* the
+move), which is a foreign write for the moved `Box` and disables it; the next
+`reset()` — at the end of every parse — reborrows it with
+`store.head.as_deref_mut()` (line 254 in all builds; line 236 under
+`debug_assertions`), which is UB.
+
+BSan report (`bun_parsers` `json::tests::env_json`, Bun's code unchanged):
+
+```
+error: Undefined Behavior: reborrow through <303424>(unprotected) at alloc50857[0x0] is forbidden
+    --> src/ast/new_store.rs:236:69
+ 236 | let mut it: Option<&mut Block> = store.head.as_deref_mut();
+     = help: the accessed tag <303424>(unprotected) has state Disabled which forbids this reborrow (acting as a child read access)
+help: the accessed tag <303424>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x28]
+    --> library/core/src/ptr/mod.rs:1966:41   (intrinsics::write_via_move)
+stack backtrace:
+4: <bun_ast::expr::expr_store::Store>::reset      at src/ast/new_store.rs:236:69
+5: bun_ast::expr::data::Store::reset               at src/ast/new_store.rs:433:17
+6: <bun_ast::StoreResetGuard as Drop>::drop        at src/ast/lib.rs:3230:9
+9: bun_parsers::json::tests::env_json              at src/parsers/json.rs:2137:9
+```
+
+Miri cannot run Bun's own test (`can't call foreign function mi_heap_new` —
+the arena allocates through mimalloc), which is how this survives Bun's Miri
+CI. [`repro/ast-store-current`](repro/ast-store-current) replicates
+`allocate`/`reset` in pure Rust; Miri (Tree Borrows) reports the same chain
+(tag created at `store.head = Some(first)`, disabled by the caller's write
+through `current`, reborrow in `reset`), and the fixed shape passes.
+**Fix:** [`bun-patches/fix-ast-store-current.patch`](bun-patches/fix-ast-store-current.patch)
+— derive `current` from the Box after it is stored (`Option::insert`).
+
 ### Other code exercised under BSan with no reports
 
 See [Coverage](#coverage). Notable clean results for code Miri cannot run:
@@ -136,15 +184,16 @@ iteration, hostile tarballs).
    range* of the allocation to update the wildcard cache. Each element touched
    adds a range, so each new exposure is O(n).
    `node_debug_info=0` cuts memory roughly 4× but not time.
-2. **Missing source locations for Bun crates.** In reports for Bun's own
-   crates, most Rust frames and the "created here" notes print as
-   `<cgu-name>:0:0` (C frames and std frames are fine): `llvm-symbolizer`
-   finds the compile unit but a line-0 location for those addresses. Not the
-   cause: Bun's `split-debuginfo = "unpacked"` (same result with it off), the
-   working directory, edition 2024, or dependency-vs-local crates — a small
-   crate reproducing each of those symbolizes correctly. Root cause not
-   identified; the reports above were triaged from the C frames, the access
-   offsets and the Miri replica.
+2. **Some locations come out as line 0.** "Created here" notes for some
+   retags carry no line — e.g. `new_store.rs:0:21` for the tag Miri attributes
+   to `store.head = Some(first)` (a `Box` moved into a field) — and in the zlib
+   driver binaries several Rust frames resolve to `<cgu-name>:0:0` while C and
+   std frames are fine. Ruled out: Bun's `split-debuginfo = "unpacked"` (same
+   with it off), the working directory, edition 2024, local vs. dependency
+   crate. A pass-side fallback (give line-0 function-entry retags the
+   function's line) left the UI suites green but did not fix the zlib case —
+   there the addresses of the whole function lack line info — so it was not
+   kept.
 3. **`cargo bsan test` fails on proc-macro doctests**: `bun_dispatch`'s
    doctest fails with "can't find crate for `quote`/`syn`" in the rustdoc
    phase (its unit tests pass).
@@ -195,6 +244,11 @@ built with `cargo bsan test`:
 
 ## Coverage
 
+`bun_parsers` runs used [`0003-test-shim-asan-headroom.patch`](bun-patches/0003-test-shim-asan-headroom.patch):
+its test-only `Bun__StackCheck__getMaxStack` shim leaves 512 KB of fake stack,
+which is exactly `StackCheck`'s headroom under `bun_asan`, so every guarded
+parse failed with "too deeply nested" (harness artifact, not a Bun bug).
+
 Bun's own `#[test]`s, built and run under BSan (Rust and the native code they
 reach instrumented). "Miri" marks crates Bun already runs under Miri.
 
@@ -214,19 +268,31 @@ reach instrumented). "Miri" marks crates Bun already runs under Miri.
 | bun_url | yes | 8 passed, no reports |
 | bun_wyhash | yes | 8 passed, no reports |
 | bun_sys | no | 15 passed, no reports |
-| (remaining crates) | | in progress |
+| bun_collections | yes | 37 passed, no reports (`static_hash_map_put_get_delete_grow` skipped: 128 seeds natively vs. 2 under `cfg(miri)`, >35 min) |
+| bun_hash | yes | 10 passed, no reports |
+| bun_paths | yes | 29 passed, no reports |
+| bun_core | no | 39 passed (1 ignored), no reports |
+| bun_parsers | no | **reports the `bun_ast` Store finding** (21 of the tests that ran, all at `new_store.rs:236`); 9 passed |
+| bun_io | no | 3 passed, no reports |
+| bun_semver | no | 2 passed, no reports |
+| bun_react_compiler | no | 6 passed, no reports |
+| bun_uws_sys | no | 2 passed, no reports |
+| bun_boringssl | no | 2 passed, no reports |
+| bun_resolver | no | 3 passed, no reports |
+| bun_router | no | not run (build stopped by the disk watchdog) |
+| bun_bundler, bun_css | no | not run: instrumented rustc for `bun_css` needs >10 GB RAM (OOM-killed); the runtime run compiles it uninstrumented for the same reason |
 
 Drivers (`0002-bsan-drivers.patch`), each test in its own process:
 
 | Crate (C library) | Tests | Result |
 |---|---|---|
 | bun_zlib (zlib-ng) | 11 | **2 sites of the finding above** (all deflate users); inflate, CRC: no reports |
-| bun_zstd (zstd) | 4 | in progress |
+| bun_zstd (zstd) | 4 | 4 passed, no reports |
 | bun_brotli (brotli) | 3 | 3 passed, no reports |
 | bun_libdeflate_sys (libdeflate) | 2 | 2 passed, no reports |
 | bun_picohttp (picohttpparser) | 3 | 3 passed, no reports |
 | bun_libarchive (libarchive + zlib-ng) | 5 | 5 passed, no reports |
-| bun_css (pure Rust, real-world stylesheets) | 4 | in progress |
+| bun_css (pure Rust, real-world stylesheets) | 4 | not run (same `bun_css` OOM) |
 
 ## Running it
 

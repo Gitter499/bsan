@@ -1,0 +1,33 @@
+diff --git a/src/ast/new_store.rs b/src/ast/new_store.rs
+index f27166ba..82ac2439 100644
+--- a/src/ast/new_store.rs
++++ b/src/ast/new_store.rs
+@@ -269,9 +269,11 @@ macro_rules! new_store {
+                     // would otherwise pay up front (see `init()` / the `head` doc).
+                     if store.current.is_null() {
+                         debug_assert!(store.head.is_none());
+-                        let mut first = Block::new_boxed();
+-                        store.current = &raw mut *first;
+-                        store.head = Some(first);
++                        // Take `current` from the Box only once it is in place: moving a Box
++                        // retags it, and writes through a pointer derived before the move are
++                        // foreign to the moved Box (Tree Borrows), which `reset` later reborrows.
++                        let first = store.head.insert(Block::new_boxed());
++                        store.current = &raw mut **first;
+                     }
+ 
+                     // SAFETY: `current` is non-null (ensured just above, or by a
+@@ -290,10 +292,9 @@ macro_rules! new_store {
+                             &raw mut **next
+                         }
+                         slot @ None => {
+-                            let mut new_block = Block::new_boxed();
+-                            let ptr = &raw mut *new_block;
+-                            *slot = Some(new_block);
+-                            ptr
++                            // Same as above: derive the pointer after the Box is stored.
++                            let new_block = slot.insert(Block::new_boxed());
++                            &raw mut **new_block
+                         }
+                     };
+                     store.current = next_block;

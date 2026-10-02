@@ -2,3 +2,5 @@ logs/
 native/out/
 native/src/
 repro/*/target/
+# The repo root ignores *.patch; the Bun patches here are deliverables.
+!*.patch
