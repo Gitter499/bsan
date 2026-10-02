@@ -1,0 +1,94 @@
+error: Undefined Behavior: an access of size 8b at offset 0xfbdd2e63ec0 is out of bounds for alloc114063 of size 40b.
+    --> /workspaces/bun/src/bun_core/util.rs:1742:19
+     |
+1742 | match fmt::write(&mut bridge, args) {
+     |       ^
+    = note: the above line calls library code, where the error was detected:
+   --> /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/fmt/num.rs:156:0
+    |
+156 | fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    | ^
+
+stack backtrace:
+0: <i64 as core::fmt::Display>::fmt
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/fmt/num.rs:156
+1: <core::fmt::rt::Argument>::fmt
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/fmt/rt.rs:152:76
+2: core::fmt::write
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/fmt/mod.rs:1687:22
+3: <bun_core::util::io::Writer as bun_core::util::io::Write>::write_fmt
+      at /workspaces/bun/src/bun_core/util.rs:1742:19
+4: <bun_jsc::console_object::formatter::WrappedWriter>::print
+      at /workspaces/bun/src/jsc/ConsoleObject.rs:2681:25
+5: <bun_jsc::console_object::formatter::Formatter>::print_integer::<false>
+      at /workspaces/bun/src/jsc/ConsoleObject.rs:3661:16
+6: <bun_jsc::console_object::formatter::Formatter>::print_as::<false>
+      at /workspaces/bun/src/jsc/ConsoleObject.rs:3309:38
+7: <bun_jsc::console_object::formatter::Formatter>::print_array::<false>
+      at /workspaces/bun/src/jsc/ConsoleObject.rs:5660:18
+8: <bun_jsc::console_object::formatter::Formatter>::print_as::<false>
+      at /workspaces/bun/src/jsc/ConsoleObject.rs:3327:36
+9: format<false>
+      at /workspaces/bun/src/jsc/ConsoleObject.rs:5660:18
+10: bun_jsc::console_object::message_with_type_and_level_
+      at /workspaces/bun/src/jsc/ConsoleObject.rs:536:9
+11: bun_jsc::console_object::message_with_type_and_level
+      at /workspaces/bun/src/jsc/ConsoleObject.rs:361:23
+12: Bun__ConsoleObject__messageWithTypeAndLevel
+      at /workspaces/bun/src/jsc/ConsoleObject.rs:6014:2
+13: Bun::ConsoleObject::messageWithTypeAndLevel(JSC::MessageType, JSC::MessageLevel, JSC::JSGlobalObject*, WTF::Ref<Inspector::ScriptArguments, WTF::RawPtrTraits<Inspector::ScriptArguments>, WTF::DefaultRefDerefTraits<Inspector::ScriptArguments>>&&)
+      at /workspaces/bun/build/debug/unified/../../../src/jsc/bindings/ConsoleObject.cpp:59:31
+14: JSC::ConsoleClient::internalMessageWithTypeAndLevel(JSC::MessageType, JSC::MessageLevel, JSC::JSGlobalObject*, WTF::Ref<Inspector::ScriptArguments, WTF::RawPtrTraits<Inspector::ScriptArguments>, WTF::DefaultRefDerefTraits<Inspector::ScriptArguments>>&&, JSC::ConsoleClient::ArgumentRequirement)
+      at keccak.9eb118512cd8a1d1-cgu.0
+15: JSC::ConsoleClient::logWithLevel(JSC::JSGlobalObject*, WTF::Ref<Inspector::ScriptArguments, WTF::RawPtrTraits<Inspector::ScriptArguments>, WTF::DefaultRefDerefTraits<Inspector::ScriptArguments>>&&, JSC::MessageLevel)
+      at keccak.9eb118512cd8a1d1-cgu.0
+16: JSC::consoleLogWithLevel(JSC::JSGlobalObject*, JSC::CallFrame*, JSC::MessageLevel)
+      at keccak.9eb118512cd8a1d1-cgu.0
+17: JSC::consoleProtoFuncLog(JSC::JSGlobalObject*, JSC::CallFrame*)
+      at keccak.9eb118512cd8a1d1-cgu.0
+18: <null>
+      at <null>
+19: op_call_ignore_result_return_location
+      at keccak.9eb118512cd8a1d1-cgu.0
+20: llint_call_javascript
+      at keccak.9eb118512cd8a1d1-cgu.0
+21: JSC::Interpreter::executeModuleProgram(JSC::JSModuleRecord*, JSC::ModuleProgramExecutable*, JSC::JSGlobalObject*, JSC::JSModuleEnvironment*, JSC::JSValue, JSC::JSValue)
+      at keccak.9eb118512cd8a1d1-cgu.0
+22: JSC::JSModuleRecord::evaluate(JSC::JSGlobalObject*, JSC::JSValue, JSC::JSValue)
+      at keccak.9eb118512cd8a1d1-cgu.0
+23: JSC::AbstractModuleRecord::evaluate(JSC::JSGlobalObject*, JSC::JSValue, JSC::JSValue)
+      at keccak.9eb118512cd8a1d1-cgu.0
+24: JSC::JSModuleLoader::evaluateNonVirtual(JSC::JSGlobalObject*, JSC::JSValue, JSC::JSValue, WTF::RefPtr<JSC::ScriptFetcher, WTF::RawPtrTraits<JSC::ScriptFetcher>, WTF::DefaultRefDerefTraits<JSC::ScriptFetcher>>, JSC::JSValue, JSC::JSValue)
+      at keccak.9eb118512cd8a1d1-cgu.0
+25: Zig::GlobalObject::moduleLoaderEvaluate(JSC::JSGlobalObject*, JSC::JSModuleLoader*, JSC::JSValue, JSC::JSValue, WTF::RefPtr<JSC::ScriptFetcher, WTF::RawPtrTraits<JSC::ScriptFetcher>, WTF::DefaultRefDerefTraits<JSC::ScriptFetcher>>, JSC::JSValue, JSC::JSValue)
+      at /workspaces/bun/build/debug/../../src/jsc/bindings/ZigGlobalObject.cpp:4316:45
+26: JSC::JSModuleLoader::evaluate(JSC::JSGlobalObject*, JSC::JSValue, JSC::JSValue, WTF::RefPtr<JSC::ScriptFetcher, WTF::RawPtrTraits<JSC::ScriptFetcher>, WTF::DefaultRefDerefTraits<JSC::ScriptFetcher>>, JSC::JSValue, JSC::JSValue)
+      at keccak.9eb118512cd8a1d1-cgu.0
+27: JSC::JSModuleRecord::execute(JSC::JSGlobalObject*, JSC::JSPromise*)
+      at keccak.9eb118512cd8a1d1-cgu.0
+28: JSC::CyclicModuleRecord::execute(JSC::JSGlobalObject*, JSC::JSPromise*)
+      at keccak.9eb118512cd8a1d1-cgu.0
+29: JSC::AbstractModuleRecord::innerModuleEvaluation(JSC::JSGlobalObject*, WTF::Vector<JSC::AbstractModuleRecord*, 8ul, WTF::CrashOnOverflow, 16ul, WTF::FastMalloc>&, unsigned int, long, JSC::JSPromise*)
+      at keccak.9eb118512cd8a1d1-cgu.0
+30: JSC::AbstractModuleRecord::innerModuleEvaluation(JSC::JSGlobalObject*, WTF::Vector<JSC::AbstractModuleRecord*, 8ul, WTF::CrashOnOverflow, 16ul, WTF::FastMalloc>&, unsigned int, long, JSC::JSPromise*)
+      at keccak.9eb118512cd8a1d1-cgu.0
+31: JSC::CyclicModuleRecord::evaluate(JSC::JSGlobalObject*, long, JSC::JSPromise*)
+      at keccak.9eb118512cd8a1d1-cgu.0
+32: JSC::AbstractModuleRecord::evaluate(JSC::JSGlobalObject*, long, JSC::JSPromise*)
+      at keccak.9eb118512cd8a1d1-cgu.0
+33: JSC::moduleLoadLinkEvaluateSettled(JSC::JSGlobalObject*, JSC::VM&, JSC::ThrowScope&, std::span<JSC::JSValue const, 4ul>, unsigned char)
+      at keccak.9eb118512cd8a1d1-cgu.0
+34: JSC::runInternalMicrotask(JSC::JSGlobalObject*, JSC::VM&, JSC::InternalMicrotask, unsigned char, std::span<JSC::JSValue const, 4ul>, JSC::MicrotaskCallCache*)
+      at keccak.9eb118512cd8a1d1-cgu.0
+35: JSC::runMicrotask(JSC::JSGlobalObject*, JSC::TopExceptionScope&, JSC::VM&, JSC::QueuedTask&, JSC::MicrotaskCallCache*)
+      at keccak.9eb118512cd8a1d1-cgu.0
+36: std::pair<JSC::JSGlobalObject*, bool> JSC::MicrotaskQueue::drainImpl<true>(JSC::JSGlobalObject*, JSC::VM&, JSC::TopExceptionScope&)
+      at keccak.9eb118512cd8a1d1-cgu.0
+37: JSC::MicrotaskQueue::drainWithUseCallOnEachMicrotask(JSC::JSGlobalObject*, JSC::VM&, JSC::TopExceptionScope&)
+      at keccak.9eb118512cd8a1d1-cgu.0
+38: std::pair<JSC::JSGlobalObject*, bool> JSC::MicrotaskQueue::drain<true>(JSC::JSGlobalObject*, JSC::VM&, JSC::TopExceptionScope&)
+      at /workspaces/bun/build/cache/webkit-fb1167ebf2cb9edc-debug/include/JavaScriptCore/MicrotaskQueue.h:281:20
+39: void JSC::MicrotaskQueue::performMicrotaskCheckpoint<true, JSC::VM::drainMicrotasks()::$_0>(JSC::VM&, JSC::VM::drainMicrotasks()::$_0 const&)
+      at keccak.9eb118512cd8a1d1-cgu.0
+
+note: stack trace was truncated after 40 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

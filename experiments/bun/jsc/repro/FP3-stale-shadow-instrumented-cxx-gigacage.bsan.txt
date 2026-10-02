@@ -1,0 +1,89 @@
+error: Undefined Behavior: trying to access an allocation that has been freed.
+  --> /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bit:87:14
+   |
+87 | return __builtin_bit_cast(_To, __from);
+   |        ^
+
+stack backtrace:
+0: Gigacage::Config* std::bit_cast<Gigacage::Config*, unsigned long*>(unsigned long* const&) requires sizeof (Gigacage::Config*) == sizeof (unsigned long*) && __is_trivially_copyable(Gigacage::Config*) && __is_trivially_copyable(unsigned long*)
+      at /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bit:87:14
+1: Gigacage::ensureGigacage()::$_0::operator()() const
+      at keccak.9eb118512cd8a1d1-cgu.0
+2: void std::__invoke_impl<void, Gigacage::ensureGigacage()::$_0>(std::__invoke_other, Gigacage::ensureGigacage()::$_0&&)
+      at keccak.9eb118512cd8a1d1-cgu.0
+3: std::__invoke_result<Gigacage::ensureGigacage()::$_0>::type std::__invoke<Gigacage::ensureGigacage()::$_0>(Gigacage::ensureGigacage()::$_0&&)
+      at keccak.9eb118512cd8a1d1-cgu.0
+4: void std::call_once<Gigacage::ensureGigacage()::$_0>(std::once_flag&, Gigacage::ensureGigacage()::$_0&&)::'lambda'()::operator()() const
+      at keccak.9eb118512cd8a1d1-cgu.0
+5: std::once_flag::_Prepare_execution::_Prepare_execution<void std::call_once<Gigacage::ensureGigacage()::$_0>(std::once_flag&, Gigacage::ensureGigacage()::$_0&&)::'lambda'()>(Gigacage::ensureGigacage()::$_0&)::'lambda'()::operator()() const
+      at keccak.9eb118512cd8a1d1-cgu.0
+6: std::once_flag::_Prepare_execution::_Prepare_execution<void std::call_once<Gigacage::ensureGigacage()::$_0>(std::once_flag&, Gigacage::ensureGigacage()::$_0&&)::'lambda'()>(Gigacage::ensureGigacage()::$_0&)::'lambda'()::__invoke()
+      at keccak.9eb118512cd8a1d1-cgu.0
+7: __pthread_once_slow
+      at nptl/pthread_once.c:118:7
+8: __wrap_pthread_once
+      at /workspaces/bun/build/debug/../../src/jsc/bindings/workaround-missing-symbols.cpp:394:1
+9: __gthread_once(int*, void (*)())
+      at keccak.9eb118512cd8a1d1-cgu.0
+10: void std::call_once<Gigacage::ensureGigacage()::$_0>(std::once_flag&, Gigacage::ensureGigacage()::$_0&&)
+      at keccak.9eb118512cd8a1d1-cgu.0
+11: Gigacage::ensureGigacage()
+      at keccak.9eb118512cd8a1d1-cgu.0
+12: WTF::initialize()::$_0::operator()() const
+      at keccak.9eb118512cd8a1d1-cgu.0
+13: void std::__invoke_impl<void, WTF::initialize()::$_0>(std::__invoke_other, WTF::initialize()::$_0&&)
+      at keccak.9eb118512cd8a1d1-cgu.0
+14: std::__invoke_result<WTF::initialize()::$_0>::type std::__invoke<WTF::initialize()::$_0>(WTF::initialize()::$_0&&)
+      at keccak.9eb118512cd8a1d1-cgu.0
+15: void std::call_once<WTF::initialize()::$_0>(std::once_flag&, WTF::initialize()::$_0&&)::'lambda'()::operator()() const
+      at keccak.9eb118512cd8a1d1-cgu.0
+16: std::once_flag::_Prepare_execution::_Prepare_execution<void std::call_once<WTF::initialize()::$_0>(std::once_flag&, WTF::initialize()::$_0&&)::'lambda'()>(WTF::initialize()::$_0&)::'lambda'()::operator()() const
+      at keccak.9eb118512cd8a1d1-cgu.0
+17: std::once_flag::_Prepare_execution::_Prepare_execution<void std::call_once<WTF::initialize()::$_0>(std::once_flag&, WTF::initialize()::$_0&&)::'lambda'()>(WTF::initialize()::$_0&)::'lambda'()::__invoke()
+      at keccak.9eb118512cd8a1d1-cgu.0
+18: __pthread_once_slow
+      at nptl/pthread_once.c:118:7
+19: __wrap_pthread_once
+      at /workspaces/bun/build/debug/../../src/jsc/bindings/workaround-missing-symbols.cpp:394:1
+20: __gthread_once(int*, void (*)())
+      at keccak.9eb118512cd8a1d1-cgu.0
+21: void std::call_once<WTF::initialize()::$_0>(std::once_flag&, WTF::initialize()::$_0&&)
+      at keccak.9eb118512cd8a1d1-cgu.0
+22: WTF::initialize()
+      at keccak.9eb118512cd8a1d1-cgu.0
+23: WTF::initializeMainThread()::$_0::operator()() const
+      at keccak.9eb118512cd8a1d1-cgu.0
+24: void std::__invoke_impl<void, WTF::initializeMainThread()::$_0>(std::__invoke_other, WTF::initializeMainThread()::$_0&&)
+      at keccak.9eb118512cd8a1d1-cgu.0
+25: std::__invoke_result<WTF::initializeMainThread()::$_0>::type std::__invoke<WTF::initializeMainThread()::$_0>(WTF::initializeMainThread()::$_0&&)
+      at keccak.9eb118512cd8a1d1-cgu.0
+26: void std::call_once<WTF::initializeMainThread()::$_0>(std::once_flag&, WTF::initializeMainThread()::$_0&&)::'lambda'()::operator()() const
+      at keccak.9eb118512cd8a1d1-cgu.0
+27: std::once_flag::_Prepare_execution::_Prepare_execution<void std::call_once<WTF::initializeMainThread()::$_0>(std::once_flag&, WTF::initializeMainThread()::$_0&&)::'lambda'()>(WTF::initializeMainThread()::$_0&)::'lambda'()::operator()() const
+      at keccak.9eb118512cd8a1d1-cgu.0
+28: std::once_flag::_Prepare_execution::_Prepare_execution<void std::call_once<WTF::initializeMainThread()::$_0>(std::once_flag&, WTF::initializeMainThread()::$_0&&)::'lambda'()>(WTF::initializeMainThread()::$_0&)::'lambda'()::__invoke()
+      at keccak.9eb118512cd8a1d1-cgu.0
+29: __pthread_once_slow
+      at nptl/pthread_once.c:118:7
+30: __wrap_pthread_once
+      at /workspaces/bun/build/debug/../../src/jsc/bindings/workaround-missing-symbols.cpp:394:1
+31: __gthread_once(int*, void (*)())
+      at keccak.9eb118512cd8a1d1-cgu.0
+32: void std::call_once<WTF::initializeMainThread()::$_0>(std::once_flag&, WTF::initializeMainThread()::$_0&&)
+      at keccak.9eb118512cd8a1d1-cgu.0
+33: WTF::initializeMainThread()
+      at keccak.9eb118512cd8a1d1-cgu.0
+34: JSCInitialize::$_0::operator()() const
+      at /workspaces/bun/build/debug/../../src/jsc/bindings/ZigGlobalObject.cpp:298:9
+35: void std::__invoke_impl<void, JSCInitialize::$_0>(std::__invoke_other, JSCInitialize::$_0&&)
+      at /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+36: std::__invoke_result<JSCInitialize::$_0>::type std::__invoke<JSCInitialize::$_0>(JSCInitialize::$_0&&)
+      at /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:96:14
+37: void std::call_once<JSCInitialize::$_0>(std::once_flag&, JSCInitialize::$_0&&)::'lambda'()::operator()() const
+      at /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/mutex:900:4
+38: std::once_flag::_Prepare_execution::_Prepare_execution<void std::call_once<JSCInitialize::$_0>(std::once_flag&, JSCInitialize::$_0&&)::'lambda'()>(JSCInitialize::$_0&)::'lambda'()::operator()() const
+      at /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/mutex:836:21
+39: std::once_flag::_Prepare_execution::_Prepare_execution<void std::call_once<JSCInitialize::$_0>(std::once_flag&, JSCInitialize::$_0&&)::'lambda'()>(JSCInitialize::$_0&)::'lambda'()::__invoke()
+      at /usr/lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/mutex:836:16
+
+note: stack trace was truncated after 40 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

@@ -1,0 +1,56 @@
+error: Undefined Behavior: write access through <50173>(unprotected) (root of the allocation) at alloc11489[0x6b40] is forbidden
+    --> /workspaces/bun/src/jsc/event_loop.rs:770:9
+     |
+ 770 | self.entered_event_loop_count += 1;
+     | ^
+     = help: the accessed tag <50173>(unprotected) (root of the allocation) is foreign to the protected tag <556029>(StrongProtector) (i.e., it is not a child)
+     = help: this foreign write access would cause the protected tag <556029>(StrongProtector) (currently Reserved (conflicted)) to become Disabled
+     = help: protected tags must never be Disabled
+help: the accessed tag <50173>(unprotected) was created here
+    --> /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/alloc/unix.rs:99:32
+     |
+  99 | let ret = unsafe { libc::posix_memalign(&mut out, align, layout.size()) };
+     |                    ^
+help: the protected tag <556029>(StrongProtector) was created here, in the initial state Reserved
+    --> /workspaces/bun/src/runtime/cli/run_command.rs:1287:0
+     |
+1287 | fn start(self) -> ! {
+     | ^
+help: the protected tag <556029>(StrongProtector) later transitioned to Reserved (conflicted) due to a foreign read access at offsets [0x6b40..0x6b48]
+    --> /workspaces/bun/src/jsc/event_loop.rs:770:9
+     |
+ 770 | self.entered_event_loop_count += 1;
+     | ^
+     = help: this transition corresponds to a temporary loss of write permissions until function exit
+
+stack backtrace:
+0: <bun_jsc::event_loop::EventLoop>::tick
+      at /workspaces/bun/src/jsc/event_loop.rs:770:9
+1: <bun_jsc::event_loop::EventLoop>::wait_for_promise
+      at /workspaces/bun/src/jsc/event_loop.rs:1144:18
+2: <bun_jsc::virtual_machine::VirtualMachine>::wait_for_promise
+      at /workspaces/bun/src/jsc/VirtualMachine.rs:3372:31
+3: <bun_jsc::virtual_machine::VirtualMachine>::load_entry_point
+      at /workspaces/bun/src/jsc/VirtualMachine.rs:3573:26
+4: <bun_runtime::cli::run_command::Run>::start
+      at /workspaces/bun/src/runtime/cli/run_command.rs:1424:18
+5: <bun_runtime::cli::run_command::RunCommand>::boot
+      at /workspaces/bun/src/runtime/cli/run_command.rs
+6: <bun_runtime::cli::run_command::RunCommand>::exec_eval
+      at /workspaces/bun/src/runtime/cli/run_command.rs:2908:9
+7: bun_runtime::cli::command::exec_auto_or_run
+      at /workspaces/bun/src/runtime/cli/mod.rs:1457:20
+8: bun_runtime::cli::command::start
+      at /workspaces/bun/src/runtime/cli/mod.rs:1287:51
+9: bun_runtime::cli::cli::start
+      at /workspaces/bun/src/runtime/cli/mod.rs:568:27
+10: main
+      at /workspaces/bun/src/runtime/bin_entry/mod.rs:210:5
+11: __libc_start_call_main
+      at csu/../sysdeps/nptl/libc_start_call_main.h:74:3
+12: call_init
+      at csu/../csu/libc-start.c:128:20
+13: __wrap___libc_start_main
+      at /workspaces/bun/build/debug/../../src/jsc/bindings/workaround-missing-symbols.cpp:487:5
+14: _start
+      at <null>

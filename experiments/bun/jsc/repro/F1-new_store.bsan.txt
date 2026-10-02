@@ -1,0 +1,65 @@
+error: Undefined Behavior: reborrow through <11998>(unprotected) at alloc2520[0x0] is forbidden
+    --> /workspaces/bun/src/ast/new_store.rs:236:69
+     |
+ 236 | let mut it: Option<&mut Block> = store.head.as_deref_mut();
+     |                                             ^
+     = note: the above line calls library code, where the error was detected:
+    --> /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/boxed.rs:2299:9
+     |
+2299 | self
+     | ^
+     = help: the accessed tag <11998>(unprotected) has state Disabled which forbids this reborrow (acting as a child read access)
+help: the accessed tag <11998>(unprotected) was created here, in the initial state Reserved
+    --> /workspaces/bun/src/ast/new_store.rs:0:21
+help: the accessed tag <11998>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x28]
+    --> /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:1966:41
+     |
+1966 | intrinsics::write_via_move(dst, src)
+     |                                 ^
+     = help: this transition corresponds to a loss of read and write permissions
+
+stack backtrace:
+0: <alloc::boxed::Box<bun_ast::expr::expr_store::Block> as core::ops::deref::DerefMut>::deref_mut
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/boxed.rs:2299:9
+1: <<alloc::boxed::Box<bun_ast::expr::expr_store::Block> as core::ops::deref::DerefMut>::deref_mut as core::ops::function::FnOnce<(&mut alloc::boxed::Box<bun_ast::expr::expr_store::Block>,)>>::call_once
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+2: <core::option::Option<&mut alloc::boxed::Box<bun_ast::expr::expr_store::Block>>>::map::<&mut bun_ast::expr::expr_store::Block, <alloc::boxed::Box<bun_ast::expr::expr_store::Block> as core::ops::deref::DerefMut>::deref_mut>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/option.rs:1165:29
+3: <core::option::Option<alloc::boxed::Box<bun_ast::expr::expr_store::Block>>>::as_deref_mut
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/option.rs:1416:23
+4: <bun_ast::expr::expr_store::Store>::reset
+      at /workspaces/bun/src/ast/new_store.rs:236:69
+5: bun_ast::expr::data::Store::reset
+      at /workspaces/bun/src/ast/new_store.rs:433:17
+6: <bun_ast::StoreResetGuard as core::ops::drop::Drop>::drop
+      at /workspaces/bun/src/ast/lib.rs:3230:9
+7: core::ptr::drop_glue::<bun_ast::StoreResetGuard>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:848:1
+8: bun_bunfig::arguments::load_bunfig
+      at /workspaces/bun/src/bunfig/arguments.rs:93:1
+9: bun_bunfig::arguments::load_config_path
+      at /workspaces/bun/src/bunfig/arguments.rs:133:5
+10: bun_bunfig::arguments::load_config
+      at /workspaces/bun/src/bunfig/arguments.rs:239:23
+11: bun_bunfig::arguments::load_config_with_cmd_args
+      at /workspaces/bun/src/bunfig/arguments.rs:250:5
+12: bun_runtime::cli::arguments::parse
+      at /workspaces/bun/src/runtime/cli/Arguments.rs:959:9
+13: bun_runtime::cli::command::create_context_data
+      at /workspaces/bun/src/runtime/cli/mod.rs:1131:24
+14: bun_runtime::cli::command::exec_auto_or_run
+      at /workspaces/bun/src/runtime/cli/mod.rs:1420:19
+15: bun_runtime::cli::command::start
+      at /workspaces/bun/src/runtime/cli/mod.rs:1287:51
+16: bun_runtime::cli::cli::start
+      at /workspaces/bun/src/runtime/cli/mod.rs:568:27
+17: main
+      at /workspaces/bun/src/runtime/bin_entry/mod.rs:210:5
+18: __libc_start_call_main
+      at csu/../sysdeps/nptl/libc_start_call_main.h:74:3
+19: call_init
+      at csu/../csu/libc-start.c:128:20
+20: __wrap___libc_start_main
+      at /workspaces/bun/build/debug/../../src/jsc/bindings/workaround-missing-symbols.cpp:487:5
+21: _start
+      at <null>

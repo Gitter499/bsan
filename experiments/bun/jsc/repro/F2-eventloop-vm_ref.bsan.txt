@@ -1,0 +1,59 @@
+error: Undefined Behavior: reborrow through <50215>(unprotected) (root of the allocation) at alloc11486[0x6b38] is forbidden
+    --> /workspaces/bun/src/jsc/event_loop.rs:1206:58
+     |
+1206 | unsafe { self.virtual_machine.unwrap_unchecked().as_ref() }
+     |                                                  ^
+     = note: the above line calls library code, where the error was detected:
+    --> /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ptr/non_null.rs:454:18
+     |
+ 454 | unsafe { &*self.as_ptr().cast_const() }
+     |          ^
+     = help: the accessed tag <50215>(unprotected) (root of the allocation) is foreign to the protected tag <391744>(StrongProtector) (i.e., it is not a child)
+     = help: this reborrow (acting as a foreign read access) would cause the protected tag <391744>(StrongProtector) (currently Unique) to become Disabled
+     = help: protected tags must never be Disabled
+help: the accessed tag <50215>(unprotected) was created here
+    --> /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/alloc/unix.rs:99:32
+     |
+  99 | let ret = unsafe { libc::posix_memalign(&mut out, align, layout.size()) };
+     |                    ^
+help: the protected tag <391744>(StrongProtector) was created here, in the initial state Reserved
+    --> /workspaces/bun/src/jsc/event_loop.rs:1062:0
+     |
+1062 | pub fn ensure_waker(&mut self) {
+     | ^
+help: the protected tag <391744>(StrongProtector) later transitioned to Unique due to a child write access at offsets [0x6b38..0x6b40]
+    --> /workspaces/bun/src/jsc/event_loop.rs:1068:13
+     |
+1068 | self.uws_loop = NonNull::new(uws::Loop::get());
+     | ^
+     = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
+
+stack backtrace:
+0: <core::ptr::non_null::NonNull<bun_jsc::virtual_machine::VirtualMachine>>::as_ref
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ptr/non_null.rs:454:18
+1: <bun_jsc::event_loop::EventLoop>::vm_ref
+      at /workspaces/bun/src/jsc/event_loop.rs:1206:58
+2: <bun_jsc::event_loop::EventLoop>::ensure_waker
+      at /workspaces/bun/src/jsc/event_loop.rs:1070:17
+3: <bun_jsc::virtual_machine::VirtualMachine>::init
+      at /workspaces/bun/src/jsc/VirtualMachine.rs:3280:43
+4: <bun_runtime::cli::run_command::RunCommand>::boot
+      at /workspaces/bun/src/runtime/cli/run_command.rs:956:22
+5: <bun_runtime::cli::run_command::RunCommand>::exec_eval
+      at /workspaces/bun/src/runtime/cli/run_command.rs:2908:9
+6: bun_runtime::cli::command::exec_auto_or_run
+      at /workspaces/bun/src/runtime/cli/mod.rs:1457:20
+7: bun_runtime::cli::command::start
+      at /workspaces/bun/src/runtime/cli/mod.rs:1287:51
+8: bun_runtime::cli::cli::start
+      at /workspaces/bun/src/runtime/cli/mod.rs:568:27
+9: main
+      at /workspaces/bun/src/runtime/bin_entry/mod.rs:210:5
+10: __libc_start_call_main
+      at csu/../sysdeps/nptl/libc_start_call_main.h:74:3
+11: call_init
+      at csu/../csu/libc-start.c:128:20
+12: __wrap___libc_start_main
+      at /workspaces/bun/build/debug/../../src/jsc/bindings/workaround-missing-symbols.cpp:487:5
+13: _start
+      at <null>

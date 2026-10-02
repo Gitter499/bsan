@@ -1,0 +1,609 @@
+diff --git a/scripts/build/bsan.ts b/scripts/build/bsan.ts
+new file mode 100644
+index 00000000..b7dd360a
+--- /dev/null
++++ b/scripts/build/bsan.ts
+@@ -0,0 +1,69 @@
++/**
++ * BorrowSanitizer (BSan) instrumentation of the Rust half of bun.
++ * Enabled with BUN_BSAN=1 (local experiment, not upstream). Mirrors what
++ * cargo-bsan injects (bsan/cargo-bsan/src/phases.rs): BSan rustflags +
++ * the LLVM pass plugin for every target Rust unit (std included, since bun
++ * already builds std with -Zbuild-std), and the two runtime archives in the
++ * final link. C/C++ stays uninstrumented. Requires asan=off (the two
++ * sanitizer runtimes conflict) and no UBSan.
++ */
++export const bsanEnabled = process.env.BUN_BSAN === "1";
++const lib = process.env.BSAN_LIB_DIR ?? "/root/.rustup/toolchains/bsan/lib";
++const debuginfo = process.env.BSAN_RUST_DEBUGINFO ?? "1";
++
++export function bsanRustflags(): string[] {
++  if (!bsanEnabled) return [];
++  return [
++    "--cfg=bsan",
++    "--check-cfg=cfg(bsan)",
++    "-Copt-level=0",
++    "-Zmir-opt-level=0",
++    "-Zcodegen-emit-retag",
++    "-Cforce-frame-pointers=yes",
++    "-Zmir-preserve-ub",
++    "-Zinline-llvm=no",
++    `-Cdebuginfo=${debuginfo}`,
++    "-Zmir-enable-passes=-CheckAlignment,-CheckNull,-CheckEnums",
++    `-Zllvm-plugins=${lib}/libbsan_plugin.so`,
++    // The bsan toolchain is a newer nightly than rust-toolchain.toml pins; don't let new lints
++    // (workspace has warnings=deny) fail the build.
++    "--cap-lints=warn",
++  ];
++}
++
++export function bsanLinkFlags(): string[] {
++  if (!bsanEnabled) return [];
++  return [
++    `-L${lib}`,
++    "-Wl,--whole-archive",
++    `${lib}/libclang_rt.bsan-x86_64.a`,
++    "-Wl,--no-whole-archive",
++    `${lib}/libbsan_rt.a`,
++    "-Wl,-u,__bsan_preinit_anchor",
++    "-Wl,--push-state,--no-as-needed",
++    ...["pthread", "rt", "m", "dl", "resolv", "c"].map(l => `-l${l}`),
++    "-Wl,--pop-state",
++  ];
++}
++
++/**
++ * Crates compiled WITHOUT the BSan pass (comma list in BSAN_SKIP_CRATES, crate target names). Used for crates whose
++ * instrumented O0 codegen does not fit in this machine's memory (e.g. bun_css peaks at >13 GB in one CGU). They
++ * keep --cfg=bsan so allocator selection stays consistent; calls into/out of them behave like calls to C.
++ */
++const skipCrates = new Set((process.env.BSAN_SKIP_CRATES ?? "").split(",").map(s => s.trim().replace(/-/g, "_")).filter(Boolean));
++const instrumentOnly = new Set(["-Zcodegen-emit-retag", "-Zmir-preserve-ub", "-Zinline-llvm=no", "-Zmir-opt-level=0",
++  "-Zmir-enable-passes=-CheckAlignment,-CheckNull,-CheckEnums"]);
++/**
++ * Crates compiled WITH the BSan pass (provenance propagation, OOB/UAF checks) but WITHOUT retags
++ * (BSAN_NORETAG_CRATES): no Tree Borrows tags/protectors are created in them, so a known pervasive aliasing
++ * pattern can be set aside while still keeping shadow provenance consistent (unlike BSAN_SKIP_CRATES, see FP1).
++ */
++const noRetagCrates = new Set((process.env.BSAN_NORETAG_CRATES ?? "").split(",").map(s => s.trim().replace(/-/g, "_")).filter(Boolean));
++export function bsanFilterRustflags(crate: string, flags: string[]): string[] {
++  if (!bsanEnabled) return flags;
++  const c = crate.replace(/-/g, "_");
++  if (skipCrates.has(c)) return flags.filter(f => !instrumentOnly.has(f) && !f.startsWith("-Zllvm-plugins="));
++  if (noRetagCrates.has(c)) return flags.filter(f => f !== "-Zcodegen-emit-retag");
++  return flags;
++}
+diff --git a/scripts/build/deps/mimalloc.ts b/scripts/build/deps/mimalloc.ts
+index 2984efa9..f3b12aa7 100644
+--- a/scripts/build/deps/mimalloc.ts
++++ b/scripts/build/deps/mimalloc.ts
+@@ -11,6 +11,7 @@
+  */
+ 
+ import type { Dependency, DirectBuild } from "../source.ts";
++import { bsanEnabled } from "../bsan.ts";
+ 
+ const MIMALLOC_COMMIT = "eab09015a5850ae18fc43ccfaa5bbe8272992314";
+ 
+@@ -38,7 +39,7 @@ export const mimalloc: Dependency = {
+     //            by one instead (ICU and libuv in bun_runtime::bin_entry's
+     //            use_mimalloc_in_dependencies, BoringSSL via the hooks in
+     //            boringssl.ts, c-ares via ares_library_init_mem).
+-    const override = cfg.linux && !cfg.asan;
++    const override = cfg.linux && !cfg.asan && !bsanEnabled;
+ 
+     const defines: Record<string, string | number | true> = {
+       // The .a path; gates symbol visibility in mimalloc/internal.h.
+diff --git a/scripts/build/flags.ts b/scripts/build/flags.ts
+index 5aaf0b93..9eaa8276 100644
+--- a/scripts/build/flags.ts
++++ b/scripts/build/flags.ts
+@@ -15,6 +15,7 @@ import { join } from "node:path";
+ import { bunExeName, type Config } from "./config.ts";
+ import { quote, slash } from "./shell.ts";
+ import { ucrtServicingLibDir } from "./winsysroot.ts";
++import { bsanEnabled, bsanLinkFlags } from "./bsan.ts";
+ 
+ export type FlagValue = string | string[] | ((cfg: Config) => string | string[]);
+ 
+@@ -622,6 +623,16 @@ export const globalFlags: Flag[] = [
+ // ═══════════════════════════════════════════════════════════════════════════
+ 
+ export const bunOnlyFlags: Flag[] = [
++  {
++    flag: "-DBUN_BSAN=1",
++    when: () => bsanEnabled,
++    desc: "BorrowSanitizer build: Rust's global allocator is libc malloc",
++  },
++  {
++    flag: `-fpass-plugin=${process.env.BSAN_LIB_DIR ?? "/root/.rustup/toolchains/bsan/lib"}/libbsan_plugin.so`,
++    when: () => bsanEnabled && process.env.BSAN_INSTRUMENT_CXX === "1",
++    desc: "BorrowSanitizer: instrument bun's own C/C++ (provenance + OOB/UAF) so pointers it stores are tracked",
++  },
+   // ─── Build profiling ───
+   {
+     flag: "-ftime-trace",
+@@ -691,6 +702,7 @@ export const bunOnlyFlags: Flag[] = [
+     when: c =>
+       c.unix &&
+       !(c.darwin && c.crossTarget !== undefined) &&
++      !bsanEnabled &&
+       ((c.debug && c.abi !== "musl" && c.abi !== "android" && !c.freebsd) || (c.release && c.asan)),
+     desc: "Undefined-behavior sanitizers",
+   },
+@@ -872,6 +884,11 @@ export const defines: Flag[] = [
+ 
+ export const linkerFlags: Flag[] = [
+   // ─── Sanitizers ───
++  {
++    flag: bsanLinkFlags(),
++    when: c => c.linux && bsanEnabled,
++    desc: "Link BorrowSanitizer runtimes (BUN_BSAN=1)",
++  },
+   {
+     flag: "-fsanitize=address",
+     when: c => c.unix && c.asan,
+@@ -885,6 +902,7 @@ export const linkerFlags: Flag[] = [
+       c.abi !== "musl" &&
+       c.abi !== "android" &&
+       !c.freebsd &&
++      !bsanEnabled &&
+       !(c.darwin && c.crossTarget !== undefined),
+     desc: "Link UBSan runtime",
+   },
+diff --git a/scripts/build/rust.ts b/scripts/build/rust.ts
+index a9361238..84aca7da 100644
+--- a/scripts/build/rust.ts
++++ b/scripts/build/rust.ts
+@@ -37,6 +37,7 @@ import { existsSync } from "node:fs";
+ import { basename, dirname, join, relative, resolve } from "node:path";
+ import type { Abi, Arch, Config, OS } from "./config.ts";
+ import { assert } from "./error.ts";
++import { bsanEnabled, bsanRustflags } from "./bsan.ts";
+ import { computeCpuTargetFlags, rustLtoInLink } from "./flags.ts";
+ import type { Ninja } from "./ninja.ts";
+ import { envify } from "./rust/cargo-env.ts";
+@@ -342,7 +343,7 @@ export function cargoBuildInvocation(cfg: Config): CargoInvocation {
+   // the parallel frontend can reorder diagnostics (and is still nightly
+   // `-Z`-gated). The shipped binaries stay on the serial path.
+   if (!cfg.ci) {
+-    rustflags.push("-Zthreads=8");
++    rustflags.push(bsanEnabled ? "-Zthreads=2" : "-Zthreads=8");
+   }
+   // rustc does not emit `.llvm_addrsig` by default on *any* target (verified
+   // empirically — Linux-gnu, musl, darwin, msvc all missing it). lld's
+@@ -391,6 +392,7 @@ export function cargoBuildInvocation(cfg: Config): CargoInvocation {
+   // experimental feature-flag defaults. Mirrors Zig's
+   // `builtin.mode == .Debug`, which the Rust port had proxied via
+   // `debug_assertions` only because the two were coextensive until now.
++  rustflags.push(...bsanRustflags());
+   rustflags.push("--check-cfg=cfg(bun_debug)");
+   if (cfg.debug) {
+     rustflags.push("--cfg=bun_debug");
+@@ -585,6 +587,8 @@ export function cargoBuildInvocation(cfg: Config): CargoInvocation {
+     CARGO_TERM_COLOR: "always",
+     [`CARGO_TARGET_${envify(triple)}_LINKER`]: linker,
+   };
++  // BSan: no incremental cache (disk budget); the instrumented build is rebuilt from scratch anyway.
++  if (bsanEnabled) env.CARGO_INCREMENTAL = "0";
+   if (cfg.asan) {
+     // ASan links machine code (no LTO), so `codegen-units = 1` only serializes each crate's LLVM pass over IR the
+     // instrumentation has about doubled; nothing built with ASan ships, so take cargo's release default instead.
+diff --git a/scripts/build/rust/units.ts b/scripts/build/rust/units.ts
+index 46efb002..1b930f4f 100644
+--- a/scripts/build/rust/units.ts
++++ b/scripts/build/rust/units.ts
+@@ -18,6 +18,7 @@
+  *   `--cap-lints allow` as in a normal cargo build.
+  */
+ 
++import { bsanFilterRustflags } from "../bsan.ts";
+ import { createHash } from "node:crypto";
+ import { existsSync, readFileSync } from "node:fs";
+ import { dirname, isAbsolute, join, relative } from "node:path";
+@@ -533,7 +534,7 @@ function rustcUnitManifest(ctx: ManifestContext, unit: RustUnit): RustcUnitManif
+   // RUSTFLAGS position: after everything cargo generates, before build-script cfgs (run.ts appends those).
+   // The plan's rustflags (rust.ts's list): appended to every *target* unit, and handed to build scripts as
+   // CARGO_ENCODED_RUSTFLAGS.
+-  if (!isHost) args.push(...plan.plannedWith.rustflags);
++  if (!isHost) args.push(...bsanFilterRustflags(unit.targetName, plan.plannedWith.rustflags));
+   // The depfile must name what rustc read: `-Zbinary-dep-depinfo` adds every rlib/rmeta/dylib it loaded
+   // (transitive crates found through -L, the sysroot std for host units, proc-macro dylibs).
+   args.push("-Z", "binary-dep-depinfo");
+diff --git a/src/ast/lib.rs b/src/ast/lib.rs
+index 8f450860..3bf07a5b 100644
+--- a/src/ast/lib.rs
++++ b/src/ast/lib.rs
+@@ -1,4 +1,6 @@
+ #![feature(allocator_api)]
++#![feature(allocator_ext)] // bsan: toolchain compat (nightly-2026-09-26 split allocator_api)
++#![allow(stable_features, unused_features)]
+ // `#[thread_local]` for the per-node-allocation hot-path TLS
+ // (`DATA_STORE_OVERRIDE`, `Expr/Stmt::data::Store::{INSTANCE,
+ // MEMORY_ALLOCATOR, DISABLE_RESET}`, `store_ast_alloc_heap::ARENA`): bare
+diff --git a/src/ast/new_store.rs b/src/ast/new_store.rs
+index f27166ba..240f006e 100644
+--- a/src/ast/new_store.rs
++++ b/src/ast/new_store.rs
+@@ -269,9 +269,11 @@ macro_rules! new_store {
+                     // would otherwise pay up front (see `init()` / the `head` doc).
+                     if store.current.is_null() {
+                         debug_assert!(store.head.is_none());
+-                        let mut first = Block::new_boxed();
+-                        store.current = &raw mut *first;
+-                        store.head = Some(first);
++                        // BSAN-FIX: derive `current` from the Box *after* it is moved into `head`
++                        // (moving a Box retags it; a pointer derived before the move is foreign to
++                        // the new tag and writing through it disables the Box — UB under Tree Borrows).
++                        store.head = Some(Block::new_boxed());
++                        store.current = &raw mut **store.head.as_mut().unwrap();
+                     }
+ 
+                     // SAFETY: `current` is non-null (ensured just above, or by a
+@@ -290,10 +292,8 @@ macro_rules! new_store {
+                             &raw mut **next
+                         }
+                         slot @ None => {
+-                            let mut new_block = Block::new_boxed();
+-                            let ptr = &raw mut *new_block;
+-                            *slot = Some(new_block);
+-                            ptr
++                            // BSAN-FIX: same as above — take the pointer after the move.
++                            &raw mut **slot.insert(Block::new_boxed())
+                         }
+                     };
+                     store.current = next_block;
+diff --git a/src/bun_alloc/ast_alloc.rs b/src/bun_alloc/ast_alloc.rs
+index c8321d11..a131e85f 100644
+--- a/src/bun_alloc/ast_alloc.rs
++++ b/src/bun_alloc/ast_alloc.rs
+@@ -135,6 +135,44 @@ impl AstAllocState {
+         }
+     }
+ 
++    /// BSAN-FIX: raw-pointer variant of [`Self::bump_alloc`]. Touches only `bump_cursor` and derives the
++    /// returned pointer from the state's own (Box) provenance, without materialising a `&mut Self` that
++    /// covers `bump_chunk` — such a reborrow is a foreign read for every block handed out earlier
++    /// (freezing them under Tree Borrows, so a later write through them is UB).
++    #[inline]
++    unsafe fn bump_alloc_raw(this: *mut Self, size: usize, align: usize) -> Option<*mut u8> {
++        debug_assert!(size != 0 && size <= BUMP_MAX && align.is_power_of_two());
++        debug_assert!(align <= mimalloc::MI_MAX_ALIGN_SIZE);
++        // SAFETY: caller passes the live installed state.
++        unsafe {
++            let cursor = (*this).bump_cursor;
++            debug_assert!(cursor <= BUMP_CHUNK);
++            let cur = (&raw mut (*this).bump_chunk).cast::<u8>().add(cursor);
++            let remaining = BUMP_CHUNK - cursor;
++            let pad = cur.align_offset(align);
++            if pad <= remaining && size <= remaining - pad {
++                (*this).bump_cursor = cursor + pad + size;
++                Some(cur.add(pad))
++            } else {
++                None
++            }
++        }
++    }
++
++    /// BSAN-FIX: raw-pointer variant of [`Self::heap_ptr`] (see [`Self::bump_alloc_raw`]).
++    #[inline]
++    unsafe fn heap_ptr_raw(this: *mut Self) -> *mut mimalloc::Heap {
++        // SAFETY: caller passes the live installed state; only the `spill`/`owned_spill` fields are borrowed.
++        unsafe {
++            if !(*this).spill.is_null() {
++                return (*this).spill;
++            }
++            let heap = (*this).owned_spill.insert(MimallocArena::new()).heap_ptr();
++            (*this).spill = heap;
++            heap
++        }
++    }
++
+     /// The state's spill `mi_heap_t`: the borrowed target installed by
+     /// [`Self::set_spill_heap`], or a lazily created owned heap when none was
+     /// provided.
+@@ -177,6 +215,14 @@ fn active_state<'a>() -> Option<&'a mut AstAllocState> {
+     unsafe { (*AST_ALLOC.as_ptr()).as_deref_mut() }
+ }
+ 
++/// BSAN-FIX: raw pointer to the installed state, carrying the Box's provenance, without a `&mut` reborrow of the
++/// whole state (see [`AstAllocState::bump_alloc_raw`]).
++#[inline]
++fn active_state_ptr() -> Option<*mut AstAllocState> {
++    // SAFETY: thread-local slot; only the Box pointer value is borrowed, not its pointee.
++    unsafe { (*AST_ALLOC.as_ptr()).as_mut().map(|b| &raw mut **b) }
++}
++
+ /// Take the recycled spare state for this thread, or allocate a fresh one.
+ #[inline]
+ pub fn acquire_state() -> Box<AstAllocState> {
+@@ -333,7 +379,7 @@ use crate::alloc_result;
+ 
+ #[inline(always)]
+ fn heap_alloc(layout: Layout) -> *mut u8 {
+-    let Some(state) = active_state() else {
++    let Some(state) = active_state_ptr() else {
+         // Global fallback (no AST scope active). `mi_malloc` tolerates
+         // `size == 0` (unique non-null pointer), so no special-casing.
+         return mimalloc::mi_malloc_auto_align(layout.size(), layout.align()).cast();
+@@ -347,14 +393,15 @@ fn heap_alloc(layout: Layout) -> *mut u8 {
+         && layout.size() <= BUMP_MAX
+         && layout.align() <= mimalloc::MI_MAX_ALIGN_SIZE
+     {
+-        if let Some(p) = state.bump_alloc(layout.size(), layout.align()) {
++        // SAFETY: `state` is the live installed state.
++        if let Some(p) = unsafe { AstAllocState::bump_alloc_raw(state, layout.size(), layout.align()) } {
+             return p;
+         }
+     }
+     // SAFETY: `heap_ptr` returns the live spill heap owned by `state`, which
+     // is owned by the thread-local for the duration of this call.
+     unsafe {
+-        mimalloc::mi_heap_malloc_auto_align(state.heap_ptr(), layout.size(), layout.align()).cast()
++        mimalloc::mi_heap_malloc_auto_align(AstAllocState::heap_ptr_raw(state), layout.size(), layout.align()).cast()
+     }
+ }
+ 
+@@ -406,12 +453,12 @@ unsafe impl Allocator for AstAlloc {
+         // `allocate` + `ptr::write_bytes(0)` cannot. Never bump-carved (the
+         // chunk is uninitialised); same lifetime semantics as `heap_alloc`.
+         // Mirrors `MimallocArena::allocate_zeroed`.
+-        let p: *mut u8 = match active_state() {
++        let p: *mut u8 = match active_state_ptr() {
+             None => mimalloc::mi_zalloc_auto_align(layout.size(), layout.align()).cast(),
+             // SAFETY: `heap_ptr` returns the live spill heap owned by the
+             // installed state; see `heap_alloc`.
+             Some(state) => unsafe {
+-                mimalloc::mi_heap_zalloc_auto_align(state.heap_ptr(), layout.size(), layout.align())
++                mimalloc::mi_heap_zalloc_auto_align(AstAllocState::heap_ptr_raw(state), layout.size(), layout.align())
+                     .cast()
+             },
+         };
+diff --git a/src/bun_alloc/lib.rs b/src/bun_alloc/lib.rs
+index c1858c12..5b1dc337 100644
+--- a/src/bun_alloc/lib.rs
++++ b/src/bun_alloc/lib.rs
+@@ -4,6 +4,8 @@
+ #![allow(clippy::disallowed_types)]
+ #![feature(arbitrary_self_types_pointers)]
+ #![feature(allocator_api)]
++#![feature(allocator_ext)] // bsan: toolchain compat (nightly-2026-09-26 split allocator_api)
++#![allow(stable_features, unused_features)]
+ // `#[thread_local]` (vs the `thread_local!` macro) compiles to a bare
+ // `__thread` slot — single `mov reg, fs:[OFFSET]` access, no `LocalKey`
+ // `__getit()` wrapper, no lazy-init flag check, no dtor-registration probe.
+@@ -170,7 +172,7 @@ macro_rules! arena_format {
+ }
+ 
+ /// `bun.use_mimalloc` — false under ASAN, where the global allocator is `std::alloc::System`.
+-pub const USE_MIMALLOC: bool = cfg!(not(bun_asan));
++pub const USE_MIMALLOC: bool = cfg!(not(any(bun_asan, bsan)));
+ 
+ // ── Allocator-vtable modules: per-module disposition (PORTING.md §Allocators) ──
+ //
+@@ -194,7 +196,7 @@ pub mod default_alloc {
+ 
+     #[inline]
+     pub fn malloc(size: usize) -> *mut c_void {
+-        if cfg!(bun_asan) {
++        if cfg!(any(bun_asan, bsan)) {
+             // SAFETY: `libc::malloc` has no input preconditions; null on failure.
+             unsafe { libc::malloc(size) }
+         } else {
+@@ -206,7 +208,7 @@ pub mod default_alloc {
+     /// `ptr` must be null or a live allocation from the default allocator.
+     #[inline]
+     pub unsafe fn realloc(ptr: *mut c_void, new_size: usize) -> *mut c_void {
+-        if cfg!(bun_asan) {
++        if cfg!(any(bun_asan, bsan)) {
+             // SAFETY: caller guarantees `ptr` is null or a live libc allocation
+             // (the default allocator under ASAN).
+             unsafe { libc::realloc(ptr, new_size) }
+@@ -220,7 +222,7 @@ pub mod default_alloc {
+     /// `ptr` must be null or a live allocation from the default allocator.
+     #[inline]
+     pub unsafe fn free(ptr: *mut c_void) {
+-        if cfg!(bun_asan) {
++        if cfg!(any(bun_asan, bsan)) {
+             // SAFETY: caller guarantees `ptr` is null or a live libc allocation
+             // (the default allocator under ASAN).
+             unsafe { libc::free(ptr) }
+@@ -242,13 +244,13 @@ pub mod default_alloc {
+         // OS (`malloc_usable_size` on Linux, `malloc_size` on macOS). `bun_asan`
+         // is only ever set on Linux or macOS, so the catch-all (non-asan, every
+         // `check-all` target including Windows) stays on mimalloc.
+-        #[cfg(all(bun_asan, target_os = "linux"))]
++        #[cfg(all(any(bun_asan, bsan), target_os = "linux"))]
+         return unsafe { libc::malloc_usable_size(ptr.cast_mut()) };
+         #[cfg(all(bun_asan, target_os = "macos"))]
+         return unsafe { libc::malloc_size(ptr) };
+         // SAFETY: caller guarantees `ptr` is a live mimalloc allocation (the
+         // non-null check above already handled null).
+-        #[cfg(not(any(all(bun_asan, target_os = "linux"), all(bun_asan, target_os = "macos"))))]
++        #[cfg(not(any(all(any(bun_asan, bsan), target_os = "linux"), all(bun_asan, target_os = "macos"))))]
+         return unsafe { crate::mimalloc::mi_usable_size(ptr) };
+     }
+ }
+diff --git a/src/bun_core/lib.rs b/src/bun_core/lib.rs
+index 6f35c201..71c0e08e 100644
+--- a/src/bun_core/lib.rs
++++ b/src/bun_core/lib.rs
+@@ -1,4 +1,6 @@
+ #![feature(allocator_api)]
++#![feature(allocator_ext)] // bsan: toolchain compat (nightly-2026-09-26 split allocator_api)
++#![allow(stable_features, unused_features)]
+ #![feature(adt_const_params)]
+ #![feature(thread_local)] // bare `__thread` slot for `thread_id::current()` cache
+ #![feature(freeze)] // `impl_field_parent!`'s `shared` arm rejects `Freeze` children at compile time
+@@ -2329,7 +2331,7 @@ pub use crate::string::immutable as strings;
+ 
+ // `true` when mimalloc is the `#[global_allocator]`; `false` under ASAN where
+ // `std::alloc::System` is installed instead. Mirrors `bun_alloc::USE_MIMALLOC`.
+-pub const USE_MIMALLOC: bool = cfg!(not(bun_asan));
++pub const USE_MIMALLOC: bool = cfg!(not(any(bun_asan, bsan)));
+ 
+ pub use env_var::feature_flag;
+ /// `bun.linuxKernelVersion()`. Lives in T1 because `bun_sys` calls it from feature probes (copy_file_range,
+diff --git a/src/bundler/lib.rs b/src/bundler/lib.rs
+index 40d6557f..02d06d97 100644
+--- a/src/bundler/lib.rs
++++ b/src/bundler/lib.rs
+@@ -1,5 +1,7 @@
+ #![feature(inherent_associated_types)]
+ #![feature(adt_const_params, allocator_api, thread_local)]
++#![feature(allocator_ext)] // bsan: toolchain compat (nightly-2026-09-26 split allocator_api)
++#![allow(stable_features, unused_features)]
+ #![allow(incomplete_features)] // inherent_associated_types — used only for the ThreadPool::Worker path
+ #![allow(non_snake_case, non_upper_case_globals)]
+ #![warn(unused_must_use)]
+diff --git a/src/collections/lib.rs b/src/collections/lib.rs
+index 57539df1..768e4cb3 100644
+--- a/src/collections/lib.rs
++++ b/src/collections/lib.rs
+@@ -8,6 +8,8 @@
+     const_trait_impl,
+     allocator_api
+ )]
++#![feature(allocator_ext)] // bsan: toolchain compat (nightly-2026-09-26 split allocator_api)
++#![allow(stable_features, unused_features)]
+ #![allow(incomplete_features)]
+ #![warn(unused_must_use)]
+ 
+diff --git a/src/css/lib.rs b/src/css/lib.rs
+index 059245a7..bc581844 100644
+--- a/src/css/lib.rs
++++ b/src/css/lib.rs
+@@ -1,4 +1,6 @@
+ #![feature(allocator_api)]
++#![feature(allocator_ext)] // bsan: toolchain compat (nightly-2026-09-26 split allocator_api)
++#![allow(stable_features, unused_features)]
+ #![warn(unused_must_use)]
+ // Allow `use bun_css as css;` from inside the crate — the ported submodules
+ // were translated against the crate's public surface and refer to it by name.
+diff --git a/src/jsc/bindings/MimallocWTFMalloc.h b/src/jsc/bindings/MimallocWTFMalloc.h
+index 4fb1e7b4..adcb1e61 100644
+--- a/src/jsc/bindings/MimallocWTFMalloc.h
++++ b/src/jsc/bindings/MimallocWTFMalloc.h
+@@ -22,7 +22,7 @@ namespace Bun {
+ /// wrong under ASAN because the buffer was allocated by `System`, not mimalloc.
+ ALWAYS_INLINE void defaultAllocatorFree(void* p)
+ {
+-#if ASAN_ENABLED
++#if ASAN_ENABLED || defined(BUN_BSAN)
+     ::free(p);
+ #else
+     mi_free(p);
+diff --git a/src/jsc/bindings/workaround-missing-symbols.cpp b/src/jsc/bindings/workaround-missing-symbols.cpp
+index 0ee12baf..eccda265 100644
+--- a/src/jsc/bindings/workaround-missing-symbols.cpp
++++ b/src/jsc/bindings/workaround-missing-symbols.cpp
+@@ -1,3 +1,8 @@
++// BSAN: these --wrap'd libc shims (dlsym, pthread_*, __libc_start_main, ...) run inside the sanitizer runtime's
++// own initialisation, before shadow memory exists; never instrument them.
++#if defined(BUN_BSAN)
++#pragma clang attribute push(__attribute__((disable_sanitizer_instrumentation)), apply_to = function)
++#endif
+ #if defined(WIN32)
+ 
+ #include <cstdint>
+@@ -539,3 +544,7 @@ void std::__libcpp_verbose_abort(char const* format, ...) BUN_VERBOSE_ABORT_NOEX
+ #endif
+ 
+ extern "C" __attribute__((weak)) void mi_thread_set_in_threadpool() {}
++
++#if defined(BUN_BSAN)
++#pragma clang attribute pop
++#endif
+diff --git a/src/jsc/event_loop.rs b/src/jsc/event_loop.rs
+index 15d84642..71fde30b 100644
+--- a/src/jsc/event_loop.rs
++++ b/src/jsc/event_loop.rs
+@@ -1067,7 +1067,10 @@ impl EventLoop {
+             debug_assert_eq!(Async::uws_to_native(uws::Loop::get()), Async::Loop::get());
+             self.uws_loop = NonNull::new(uws::Loop::get());
+         }
+-        if self.vm_ref().event_loop_handle.is_none() {
++        // BSAN-FIX: read the VM field through the raw back-pointer instead of `vm_ref()`, which would
++        // materialise `&VirtualMachine` over the embedded (and already written, protected) `&mut self`.
++        // SAFETY: `vm()` is the live owning VM; only the `event_loop_handle` field is read.
++        if unsafe { (*self.vm()).event_loop_handle.is_none() } {
+             let vm = self.vm();
+             // SAFETY: `vm` is the live owning VM.
+             unsafe { (*vm).event_loop_handle = Some(Async::Loop::get()) };
+diff --git a/src/parsers/lib.rs b/src/parsers/lib.rs
+index 1488ec61..b194fe2f 100644
+--- a/src/parsers/lib.rs
++++ b/src/parsers/lib.rs
+@@ -1,5 +1,7 @@
+ #![warn(unused_must_use)]
+ #![feature(allocator_api)]
++#![feature(allocator_ext)] // bsan: toolchain compat (nightly-2026-09-26 split allocator_api)
++#![allow(stable_features, unused_features)]
+ 
+ pub mod error;
+ pub use error::{Error, Result};
+diff --git a/src/ptr/lib.rs b/src/ptr/lib.rs
+index f428a128..6b3018f0 100644
+--- a/src/ptr/lib.rs
++++ b/src/ptr/lib.rs
+@@ -1,4 +1,6 @@
+ #![feature(allocator_api)]
++#![feature(allocator_ext)] // bsan: toolchain compat (nightly-2026-09-26 split allocator_api)
++#![allow(stable_features, unused_features)]
+ #![allow(
+     non_snake_case,
+     non_camel_case_types,
+diff --git a/src/react_compiler/lib.rs b/src/react_compiler/lib.rs
+index 1b2dde1c..87a8d007 100644
+--- a/src/react_compiler/lib.rs
++++ b/src/react_compiler/lib.rs
+@@ -6,6 +6,8 @@
+ //! depends on the vendored HIR-level crates unmodified.
+ 
+ #![feature(allocator_api)]
++#![feature(allocator_ext)] // bsan: toolchain compat (nightly-2026-09-26 split allocator_api)
++#![allow(stable_features, unused_features)]
+ 
+ pub mod collections;
+ pub mod diagnostics;
+diff --git a/src/runtime/bin_entry/mod.rs b/src/runtime/bin_entry/mod.rs
+index b1f3c207..c4901c92 100644
+--- a/src/runtime/bin_entry/mod.rs
++++ b/src/runtime/bin_entry/mod.rs
+@@ -43,12 +43,12 @@ use bun_core::StackCheck;
+ use bun_core::output;
+ 
+ /// mimalloc as the process allocator.
+-#[cfg(not(bun_asan))]
++#[cfg(not(any(bun_asan, bsan)))]
+ #[global_allocator]
+ static ALLOC: bun_alloc::Mimalloc = bun_alloc::Mimalloc;
+ 
+ /// Under ASAN, use the system allocator so the interceptor sees every allocation.
+-#[cfg(bun_asan)]
++#[cfg(any(bun_asan, bsan))]
+ #[global_allocator]
+ static ALLOC: std::alloc::System = std::alloc::System;
+ 
+diff --git a/src/shell_parser/lib.rs b/src/shell_parser/lib.rs
+index 303176dc..ec8b1827 100644
+--- a/src/shell_parser/lib.rs
++++ b/src/shell_parser/lib.rs
+@@ -1,4 +1,6 @@
+ #![feature(adt_const_params, generic_const_exprs, allocator_api)]
++#![feature(allocator_ext)] // bsan: toolchain compat (nightly-2026-09-26 split allocator_api)
++#![allow(stable_features, unused_features)]
+ #![warn(unused_must_use)]
+ #![allow(incomplete_features)]
+ 
+diff --git a/src/sourcemap/lib.rs b/src/sourcemap/lib.rs
+index de4d0c42..2364af63 100644
+--- a/src/sourcemap/lib.rs
++++ b/src/sourcemap/lib.rs
+@@ -1,4 +1,6 @@
+ #![feature(allocator_api)]
++#![feature(allocator_ext)] // bsan: toolchain compat (nightly-2026-09-26 split allocator_api)
++#![allow(stable_features, unused_features)]
+ #![warn(unused_must_use)]
+ //! `bun_sourcemap` — source map parsing, encoding, and lookup.
+ //!

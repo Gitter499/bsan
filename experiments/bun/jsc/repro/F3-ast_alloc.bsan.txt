@@ -1,0 +1,113 @@
+error: Undefined Behavior: write access through <659684>(StrongProtector) at alloc104361[0x40] is forbidden
+    --> /workspaces/bun/src/js_parser/visit/visit_expr.rs:848:9
+     |
+ 848 | *e = current;
+     | ^
+     = help: the accessed tag <659684>(StrongProtector) is a child of the conflicting tag <652075>(unprotected)
+     = help: the conflicting tag <652075>(unprotected) has state Frozen which forbids this child write access
+help: the accessed tag <659684>(StrongProtector) was created here
+    --> /workspaces/bun/src/js_parser/visit/visit_expr.rs:774:0
+     |
+ 774 | fn e_binary(p: &mut Self, e: &mut Expr) {
+     | ^
+help: the conflicting tag <652075>(unprotected) was created here, in the initial state Reserved
+    --> /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/slice/mod.rs:762:0
+     |
+ 762 | pub const fn as_mut_ptr(&mut self) -> *mut T {
+     | ^
+help: the conflicting tag <652075>(unprotected) later transitioned to Unique due to a child write access at offsets [0x40..0x50]
+    --> /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:574:14
+     |
+ 574 | unsafe { crate::intrinsics::copy_nonoverlapping(src, dst, count) }
+     |          ^
+     = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
+help: the conflicting tag <652075>(unprotected) later transitioned to Frozen due to a reborrow (acting as a foreign read access) at offsets [0x0..0x4010]
+    --> /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/boxed.rs:2299:9
+     |
+2299 | self
+     | ^
+     = help: this transition corresponds to a loss of write permissions
+
+stack backtrace:
+0: <bun_js_parser::p::P<true, false>>::e_binary
+      at /workspaces/bun/src/js_parser/visit/visit_expr.rs:848:9
+1: <bun_js_parser::p::P<true, false>>::visit_expr_in_out
+      at /workspaces/bun/src/js_parser/visit/visit_expr.rs:67:51
+2: <bun_js_parser::p::P<true, false>>::visit_expr
+      at /workspaces/bun/src/js_parser/visit/visit_expr.rs:40:14
+3: <bun_js_parser::p::P<true, false>>::e_call
+      at /workspaces/bun/src/js_parser/visit/visit_expr.rs:2135:19
+4: <bun_js_parser::p::P<true, false>>::visit_expr_in_out
+      at /workspaces/bun/src/js_parser/visit/visit_expr.rs:77:52
+5: <bun_js_parser::p::P<true, false>>::visit_expr
+      at /workspaces/bun/src/js_parser/visit/visit_expr.rs:40:14
+6: <bun_js_parser::p::P<true, false>>::s_expr
+      at /workspaces/bun/src/js_parser/visit/visit_stmt.rs:1387:11
+7: <bun_js_parser::p::P<true, false>>::visit_and_append_stmt
+      at /workspaces/bun/src/js_parser/visit/visit_stmt.rs:108:40
+8: <bun_js_parser::p::P<true, false>>::visit_stmts
+      at /workspaces/bun/src/js_parser/visit/mod.rs:1600:19
+9: <bun_js_parser::p::P<true, false>>::visit_stmts_and_prepend_temp_refs
+      at /workspaces/bun/src/js_parser/visit/mod.rs:60:14
+10: <bun_js_parser::p::P<true, false>>::append_part
+      at /workspaces/bun/src/js_parser/p.rs:5643:14
+11: <bun_js_parser::parse::parse_entry::Parser>::_parse::<true>
+      at /workspaces/bun/src/js_parser/parse/parse_entry.rs:1203:27
+12: <bun_js_parser::parse::parse_entry::Parser>::parse
+      at /workspaces/bun/src/js_parser/parse/parse_entry.rs:420:22
+13: <bun_bundler::cache::JavaScript>::parse
+      at /workspaces/bun/src/bundler/cache.rs:89:35
+14: <bun_bundler::transpiler::Transpiler>::parse_maybe_return_file_only_allow_shared_buffer::<false, false>
+      at /workspaces/bun/src/bundler/transpiler.rs:1682:22
+15: <bun_bundler::transpiler::Transpiler>::parse_maybe_return_file_only::<false>
+      at /workspaces/bun/src/bundler/transpiler.rs:1339:14
+16: bun_runtime::jsc_hooks::transpile_source_code_inner
+      at /workspaces/bun/src/runtime/jsc_hooks.rs:2618:30
+17: Bun__transpileFile
+      at /workspaces/bun/src/runtime/jsc_hooks.rs:4373:52
+18: JSC::JSValue Bun::fetchESMSourceCode<true>(Zig::GlobalObject*, Bun::JSModuleGraph*, JSC::JSString*, ErrorableResolvedSource*, BunString*, BunString*, BunString*)
+      at /workspaces/bun/build/debug/unified/../../../src/jsc/bindings/ModuleLoader.cpp:1141:15
+19: Bun::fetchESMSourceCodeAsync(Zig::GlobalObject*, Bun::JSModuleGraph*, JSC::JSString*, ErrorableResolvedSource*, BunString*, BunString*, BunString*)
+      at /workspaces/bun/build/debug/unified/../../../src/jsc/bindings/ModuleLoader.cpp:1264:12
+20: Zig::GlobalObject::moduleLoaderFetch(JSC::JSGlobalObject*, JSC::JSModuleLoader*, JSC::JSValue, WTF::String const&, WTF::RefPtr<JSC::ScriptFetchParameters, WTF::RawPtrTraits<JSC::ScriptFetchParameters>, WTF::DefaultRefDerefTraits<JSC::ScriptFetchParameters>>, WTF::RefPtr<JSC::ScriptFetcher, WTF::RawPtrTraits<JSC::ScriptFetcher>, WTF::DefaultRefDerefTraits<JSC::ScriptFetcher>>)
+      at /workspaces/bun/build/debug/../../src/jsc/bindings/ZigGlobalObject.cpp:3811:22
+21: JSC::JSModuleLoader::fetch(JSC::JSGlobalObject*, JSC::JSValue, WTF::String const&, WTF::RefPtr<JSC::ScriptFetchParameters, WTF::RawPtrTraits<JSC::ScriptFetchParameters>, WTF::DefaultRefDerefTraits<JSC::ScriptFetchParameters>>, WTF::RefPtr<JSC::ScriptFetcher, WTF::RawPtrTraits<JSC::ScriptFetcher>, WTF::DefaultRefDerefTraits<JSC::ScriptFetcher>>)
+      at keccak.9eb118512cd8a1d1-cgu.0
+22: JSC::JSModuleLoader::hostLoadImportedModule(JSC::JSGlobalObject*, JSC::JSModuleLoader::ModuleReferrer const&, JSC::AbstractModuleRecord::ModuleRequest const&, JSC::JSCell*, WTF::RefPtr<JSC::ScriptFetcher, WTF::RawPtrTraits<JSC::ScriptFetcher>, WTF::DefaultRefDerefTraits<JSC::ScriptFetcher>>, bool)
+      at keccak.9eb118512cd8a1d1-cgu.0
+23: JSC::JSModuleLoader::innerModuleLoading(JSC::JSGlobalObject*, JSC::ModuleGraphLoadingState*, JSC::AbstractModuleRecord*)
+      at keccak.9eb118512cd8a1d1-cgu.0
+24: JSC::JSModuleLoader::loadRequestedModules(JSC::JSGlobalObject*, JSC::AbstractModuleRecord*, WTF::RefPtr<JSC::ScriptFetcher, WTF::RawPtrTraits<JSC::ScriptFetcher>, WTF::DefaultRefDerefTraits<JSC::ScriptFetcher>>)
+      at keccak.9eb118512cd8a1d1-cgu.0
+25: JSC::moduleLoadStep(JSC::JSGlobalObject*, JSC::VM&, JSC::ThrowScope&, std::span<JSC::JSValue const, 4ul>, unsigned char)
+      at keccak.9eb118512cd8a1d1-cgu.0
+26: JSC::runInternalMicrotask(JSC::JSGlobalObject*, JSC::VM&, JSC::InternalMicrotask, unsigned char, std::span<JSC::JSValue const, 4ul>, JSC::MicrotaskCallCache*)
+      at keccak.9eb118512cd8a1d1-cgu.0
+27: JSC::runMicrotask(JSC::JSGlobalObject*, JSC::TopExceptionScope&, JSC::VM&, JSC::QueuedTask&, JSC::MicrotaskCallCache*)
+      at keccak.9eb118512cd8a1d1-cgu.0
+28: std::pair<JSC::JSGlobalObject*, bool> JSC::MicrotaskQueue::drainImpl<true>(JSC::JSGlobalObject*, JSC::VM&, JSC::TopExceptionScope&)
+      at keccak.9eb118512cd8a1d1-cgu.0
+29: JSC::MicrotaskQueue::drainWithUseCallOnEachMicrotask(JSC::JSGlobalObject*, JSC::VM&, JSC::TopExceptionScope&)
+      at keccak.9eb118512cd8a1d1-cgu.0
+30: std::pair<JSC::JSGlobalObject*, bool> JSC::MicrotaskQueue::drain<true>(JSC::JSGlobalObject*, JSC::VM&, JSC::TopExceptionScope&)
+      at /workspaces/bun/build/cache/webkit-fb1167ebf2cb9edc-debug/include/JavaScriptCore/MicrotaskQueue.h:281:20
+31: void JSC::MicrotaskQueue::performMicrotaskCheckpoint<true, JSC::VM::drainMicrotasks()::$_0>(JSC::VM&, JSC::VM::drainMicrotasks()::$_0 const&)
+      at keccak.9eb118512cd8a1d1-cgu.0
+32: JSC::VM::drainMicrotasks()
+      at keccak.9eb118512cd8a1d1-cgu.0
+33: Zig::GlobalObject::drainMicrotasks()
+      at /workspaces/bun/build/debug/../../src/jsc/bindings/ZigGlobalObject.cpp:3153:23
+34: JSC__JSGlobalObject__drainMicrotasks
+      at /workspaces/bun/build/debug/../../src/jsc/bindings/ZigGlobalObject.cpp:3182:5
+35: <bun_jsc::event_loop::EventLoop>::drain_microtasks_with_global
+      at /workspaces/bun/src/jsc/event_loop.rs:424:9
+36: <bun_jsc::event_loop::EventLoop>::tick_turn
+      at /workspaces/bun/src/jsc/event_loop.rs:801:13
+37: <bun_jsc::event_loop::EventLoop>::tick
+      at /workspaces/bun/src/jsc/event_loop.rs:772:22
+38: <bun_jsc::event_loop::EventLoop>::wait_for_promise
+      at /workspaces/bun/src/jsc/event_loop.rs:1141:18
+39: <bun_jsc::virtual_machine::VirtualMachine>::wait_for_promise
+      at /workspaces/bun/src/jsc/VirtualMachine.rs:3373:6
+
+note: stack trace was truncated after 40 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

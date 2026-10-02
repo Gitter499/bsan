@@ -12,6 +12,19 @@ aliasing/memory bugs that Miri cannot reach.
 
 ## Findings
 
+| # | Bun bug | Found by | Confirmed by | Fix |
+|---|---|---|---|---|
+| 1 | `bun_zlib`: zlib-ng's stored `z_stream` back-pointer vs. protected `&mut` (HTTP/WebSocket compression, `Bun.deflateSync`/`gzipSync`) | BSan, driver tests | Miri replica; fix clean under BSan | `bun-patches/fix-zlib-deflate-backpointer.patch` |
+| 2 | `bun_ast` `new_store!`: `current` taken from a `Box` before it is moved (every parse) | BSan, Bun's `bun_parsers` tests + runtime run | Miri replica (two independent ones) | `bun-patches/fix-ast-store-current.patch` |
+| 3 | `bun_alloc::ast_alloc`: each allocation reborrows the whole state, freezing earlier bump allocations (every parse) | BSan, runtime run | Miri replica; fix clean under BSan | `jsc/fix-02-ast_alloc.patch` |
+| 4 | `bun_jsc` VirtualMachine/EventLoop: `&VirtualMachine` / self-pointer writes while a protected `&mut` to an embedded part is live (3 sites observed; ~28 more match the pattern, unconfirmed) | BSan, runtime run | Miri replicas | partial: `jsc/fix-03-ensure_waker-partial.patch` |
+
+Findings 3–4 come from the runtime run (a BSan-instrumented `bun-debug` built
+with Bun's own build system); details, reports and Miri crates are in
+[`jsc/REPORT.md`](jsc/REPORT.md). That run only exercised startup: every JS
+test aborts at the first module load on a BSan false positive (stale shadow
+provenance for pointers written by uninstrumented C++), see the report.
+
 ### Bun bug: zlib-ng's stored `z_stream` back-pointer vs. protected `&mut` (Tree Borrows UB)
 
 **Status: confirmed** by BSan on Bun's real code against instrumented zlib-ng,
@@ -200,7 +213,19 @@ iteration, hostile tarballs).
 4. **Every instrumented rlib bundles the BSan runtime.** `-lstatic=clang_rt.bsan-…`
    in `bsan_rustflags` makes rustc copy the runtime's 176 objects (~3 MB) into
    each crate's rlib, which adds up on a 100-crate workspace.
-5. No way to continue after the first report (each report aborts the process),
+5. **False positive: float parsing leaves a protector alive.**
+   [`repro/dec2flt-protector`](repro/dec2flt-protector): safe Rust only —
+   `let v: Vec<u8> = …; str::from_utf8(&v)?.parse::<f64>(); drop(v)` — BSan
+   reports "deallocation through <tag> (root of the allocation) … would cause
+   the protected tag <tag>(StrongProtector) (currently Frozen) to become
+   Disabled", with the protected tag created in
+   `core::num::dec2flt::parse.rs` (line 0). Happens for `f64` and `f32`,
+   including `"inf"`; not for `parse::<u64>()` or a `&'static str`. Miri (Tree
+   Borrows) passes all of these. In Bun it fires in `bun_parsers`
+   `json::tests::lenient_numbers` (`json_stage2.rs` `parse_number_text`), which
+   is safe code. The sysroot is built with `-Zmir-opt-level=0` and the
+   `dec2flt` functions are not `#[inline(always)]`; root cause not identified.
+6. No way to continue after the first report (each report aborts the process),
    which forces one-test-per-process runs to see past a known issue.
 
 ## How Bun was made to run under BSan

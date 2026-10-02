@@ -1,0 +1,32 @@
+diff --git a/src/ast/new_store.rs b/src/ast/new_store.rs
+index f27166ba..240f006e 100644
+--- a/src/ast/new_store.rs
++++ b/src/ast/new_store.rs
+@@ -269,9 +269,11 @@ macro_rules! new_store {
+                     // would otherwise pay up front (see `init()` / the `head` doc).
+                     if store.current.is_null() {
+                         debug_assert!(store.head.is_none());
+-                        let mut first = Block::new_boxed();
+-                        store.current = &raw mut *first;
+-                        store.head = Some(first);
++                        // BSAN-FIX: derive `current` from the Box *after* it is moved into `head`
++                        // (moving a Box retags it; a pointer derived before the move is foreign to
++                        // the new tag and writing through it disables the Box — UB under Tree Borrows).
++                        store.head = Some(Block::new_boxed());
++                        store.current = &raw mut **store.head.as_mut().unwrap();
+                     }
+ 
+                     // SAFETY: `current` is non-null (ensured just above, or by a
+@@ -290,10 +292,8 @@ macro_rules! new_store {
+                             &raw mut **next
+                         }
+                         slot @ None => {
+-                            let mut new_block = Block::new_boxed();
+-                            let ptr = &raw mut *new_block;
+-                            *slot = Some(new_block);
+-                            ptr
++                            // BSAN-FIX: same as above — take the pointer after the move.
++                            &raw mut **slot.insert(Block::new_boxed())
+                         }
+                     };
+                     store.current = next_block;

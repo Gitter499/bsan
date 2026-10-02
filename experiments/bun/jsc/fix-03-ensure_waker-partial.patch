@@ -1,0 +1,16 @@
+diff --git a/src/jsc/event_loop.rs b/src/jsc/event_loop.rs
+index 15d84642..71fde30b 100644
+--- a/src/jsc/event_loop.rs
++++ b/src/jsc/event_loop.rs
+@@ -1067,7 +1067,10 @@ impl EventLoop {
+             debug_assert_eq!(Async::uws_to_native(uws::Loop::get()), Async::Loop::get());
+             self.uws_loop = NonNull::new(uws::Loop::get());
+         }
+-        if self.vm_ref().event_loop_handle.is_none() {
++        // BSAN-FIX: read the VM field through the raw back-pointer instead of `vm_ref()`, which would
++        // materialise `&VirtualMachine` over the embedded (and already written, protected) `&mut self`.
++        // SAFETY: `vm()` is the live owning VM; only the `event_loop_handle` field is read.
++        if unsafe { (*self.vm()).event_loop_handle.is_none() } {
+             let vm = self.vm();
+             // SAFETY: `vm` is the live owning VM.
+             unsafe { (*vm).event_loop_handle = Some(Async::Loop::get()) };

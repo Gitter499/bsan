@@ -1,0 +1,59 @@
+error: Undefined Behavior: trying to access an allocation that has been freed.
+   --> /workspaces/bun/src/bun_alloc/lib.rs:814:24
+    |
+814 | self.raw_bytes(self.m_length as usize)
+    |                ^
+
+stack backtrace:
+0: <bun_alloc::WTFStringImplStruct>::latin1_slice
+      at /workspaces/bun/src/bun_alloc/lib.rs:814:24
+1: <bun_alloc::WTFStringImplStruct as bun_core::string::wtf::WTFStringImplExt>::to_utf8
+      at /workspaces/bun/src/bun_core/string/wtf.rs:33:67
+2: <bun_core::string::String>::to_utf8
+      at /workspaces/bun/src/bun_core/string/mod.rs:760:49
+3: __bun_fetch_builtin_module
+      at /workspaces/bun/src/runtime/jsc_hooks.rs:3621:31
+4: Bun__fetchBuiltinModule
+      at /workspaces/bun/src/jsc/ModuleLoader.rs:163:11
+5: JSC::JSValue Bun::fetchESMSourceCode<true>(Zig::GlobalObject*, Bun::JSModuleGraph*, JSC::JSString*, ErrorableResolvedSource*, BunString*, BunString*, BunString*)
+      at /workspaces/bun/build/debug/unified/../../../src/jsc/bindings/ModuleLoader.cpp:1016:9
+6: Bun::fetchESMSourceCodeAsync(Zig::GlobalObject*, Bun::JSModuleGraph*, JSC::JSString*, ErrorableResolvedSource*, BunString*, BunString*, BunString*)
+      at /workspaces/bun/build/debug/unified/../../../src/jsc/bindings/ModuleLoader.cpp:1264:12
+7: Zig::GlobalObject::moduleLoaderFetch(JSC::JSGlobalObject*, JSC::JSModuleLoader*, JSC::JSValue, WTF::String const&, WTF::RefPtr<JSC::ScriptFetchParameters, WTF::RawPtrTraits<JSC::ScriptFetchParameters>, WTF::DefaultRefDerefTraits<JSC::ScriptFetchParameters>>, WTF::RefPtr<JSC::ScriptFetcher, WTF::RawPtrTraits<JSC::ScriptFetcher>, WTF::DefaultRefDerefTraits<JSC::ScriptFetcher>>)
+      at /workspaces/bun/build/debug/../../src/jsc/bindings/ZigGlobalObject.cpp:3811:22
+8: JSC::JSModuleLoader::fetch(JSC::JSGlobalObject*, JSC::JSValue, WTF::String const&, WTF::RefPtr<JSC::ScriptFetchParameters, WTF::RawPtrTraits<JSC::ScriptFetchParameters>, WTF::DefaultRefDerefTraits<JSC::ScriptFetchParameters>>, WTF::RefPtr<JSC::ScriptFetcher, WTF::RawPtrTraits<JSC::ScriptFetcher>, WTF::DefaultRefDerefTraits<JSC::ScriptFetcher>>)
+      at keccak.9eb118512cd8a1d1-cgu.0
+9: JSC::JSModuleLoader::loadModule(JSC::JSGlobalObject*, JSC::Identifier const&, WTF::RefPtr<JSC::ScriptFetchParameters, WTF::RawPtrTraits<JSC::ScriptFetchParameters>, WTF::DefaultRefDerefTraits<JSC::ScriptFetchParameters>>, WTF::RefPtr<JSC::ScriptFetcher, WTF::RawPtrTraits<JSC::ScriptFetcher>, WTF::DefaultRefDerefTraits<JSC::ScriptFetcher>>, WTF::OptionSet<JSC::ModuleLoadFlag, (WTF::ConcurrencyTag)0>, long, WTF::String const&)
+      at keccak.9eb118512cd8a1d1-cgu.0
+10: JSC::loadAndEvaluateModule(JSC::JSGlobalObject*, WTF::String const&, WTF::RefPtr<JSC::ScriptFetchParameters, WTF::RawPtrTraits<JSC::ScriptFetchParameters>, WTF::DefaultRefDerefTraits<JSC::ScriptFetchParameters>>, WTF::RefPtr<JSC::ScriptFetcher, WTF::RawPtrTraits<JSC::ScriptFetcher>, WTF::DefaultRefDerefTraits<JSC::ScriptFetcher>>)
+      at keccak.9eb118512cd8a1d1-cgu.0
+11: JSC__JSModuleLoader__loadAndEvaluateModule
+      at /workspaces/bun/build/debug/../../src/jsc/bindings/bindings.cpp:3813:21
+12: <bun_jsc::js_module_loader::JSModuleLoader>::load_and_evaluate_module_ptr
+      at /workspaces/bun/src/jsc/JSModuleLoader.rs:37:33
+13: <bun_jsc::virtual_machine::VirtualMachine>::reload_entry_point
+      at /workspaces/bun/src/jsc/VirtualMachine.rs:3512:17
+14: <bun_jsc::virtual_machine::VirtualMachine>::load_entry_point
+      at /workspaces/bun/src/jsc/VirtualMachine.rs:3547:28
+15: <bun_runtime::cli::run_command::Run>::start
+      at /workspaces/bun/src/runtime/cli/run_command.rs:1424:18
+16: <bun_runtime::cli::run_command::RunCommand>::boot
+      at /workspaces/bun/src/runtime/cli/run_command.rs
+17: <bun_runtime::cli::run_command::RunCommand>::exec_eval
+      at /workspaces/bun/src/runtime/cli/run_command.rs:2908:9
+18: bun_runtime::cli::command::exec_auto_or_run
+      at /workspaces/bun/src/runtime/cli/mod.rs:1457:20
+19: bun_runtime::cli::command::start
+      at /workspaces/bun/src/runtime/cli/mod.rs:1287:51
+20: bun_runtime::cli::cli::start
+      at /workspaces/bun/src/runtime/cli/mod.rs:568:27
+21: main
+      at /workspaces/bun/src/runtime/bin_entry/mod.rs:210:5
+22: __libc_start_call_main
+      at csu/../sysdeps/nptl/libc_start_call_main.h:74:3
+23: call_init
+      at csu/../csu/libc-start.c:128:20
+24: __wrap___libc_start_main
+      at /workspaces/bun/build/debug/../../src/jsc/bindings/workaround-missing-symbols.cpp:487:5
+25: _start
+      at <null>

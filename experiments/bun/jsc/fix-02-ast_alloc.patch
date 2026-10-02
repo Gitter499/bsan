@@ -1,0 +1,106 @@
+diff --git a/src/bun_alloc/ast_alloc.rs b/src/bun_alloc/ast_alloc.rs
+index c8321d11..a131e85f 100644
+--- a/src/bun_alloc/ast_alloc.rs
++++ b/src/bun_alloc/ast_alloc.rs
+@@ -135,6 +135,44 @@ impl AstAllocState {
+         }
+     }
+ 
++    /// BSAN-FIX: raw-pointer variant of [`Self::bump_alloc`]. Touches only `bump_cursor` and derives the
++    /// returned pointer from the state's own (Box) provenance, without materialising a `&mut Self` that
++    /// covers `bump_chunk` — such a reborrow is a foreign read for every block handed out earlier
++    /// (freezing them under Tree Borrows, so a later write through them is UB).
++    #[inline]
++    unsafe fn bump_alloc_raw(this: *mut Self, size: usize, align: usize) -> Option<*mut u8> {
++        debug_assert!(size != 0 && size <= BUMP_MAX && align.is_power_of_two());
++        debug_assert!(align <= mimalloc::MI_MAX_ALIGN_SIZE);
++        // SAFETY: caller passes the live installed state.
++        unsafe {
++            let cursor = (*this).bump_cursor;
++            debug_assert!(cursor <= BUMP_CHUNK);
++            let cur = (&raw mut (*this).bump_chunk).cast::<u8>().add(cursor);
++            let remaining = BUMP_CHUNK - cursor;
++            let pad = cur.align_offset(align);
++            if pad <= remaining && size <= remaining - pad {
++                (*this).bump_cursor = cursor + pad + size;
++                Some(cur.add(pad))
++            } else {
++                None
++            }
++        }
++    }
++
++    /// BSAN-FIX: raw-pointer variant of [`Self::heap_ptr`] (see [`Self::bump_alloc_raw`]).
++    #[inline]
++    unsafe fn heap_ptr_raw(this: *mut Self) -> *mut mimalloc::Heap {
++        // SAFETY: caller passes the live installed state; only the `spill`/`owned_spill` fields are borrowed.
++        unsafe {
++            if !(*this).spill.is_null() {
++                return (*this).spill;
++            }
++            let heap = (*this).owned_spill.insert(MimallocArena::new()).heap_ptr();
++            (*this).spill = heap;
++            heap
++        }
++    }
++
+     /// The state's spill `mi_heap_t`: the borrowed target installed by
+     /// [`Self::set_spill_heap`], or a lazily created owned heap when none was
+     /// provided.
+@@ -177,6 +215,14 @@ fn active_state<'a>() -> Option<&'a mut AstAllocState> {
+     unsafe { (*AST_ALLOC.as_ptr()).as_deref_mut() }
+ }
+ 
++/// BSAN-FIX: raw pointer to the installed state, carrying the Box's provenance, without a `&mut` reborrow of the
++/// whole state (see [`AstAllocState::bump_alloc_raw`]).
++#[inline]
++fn active_state_ptr() -> Option<*mut AstAllocState> {
++    // SAFETY: thread-local slot; only the Box pointer value is borrowed, not its pointee.
++    unsafe { (*AST_ALLOC.as_ptr()).as_mut().map(|b| &raw mut **b) }
++}
++
+ /// Take the recycled spare state for this thread, or allocate a fresh one.
+ #[inline]
+ pub fn acquire_state() -> Box<AstAllocState> {
+@@ -333,7 +379,7 @@ use crate::alloc_result;
+ 
+ #[inline(always)]
+ fn heap_alloc(layout: Layout) -> *mut u8 {
+-    let Some(state) = active_state() else {
++    let Some(state) = active_state_ptr() else {
+         // Global fallback (no AST scope active). `mi_malloc` tolerates
+         // `size == 0` (unique non-null pointer), so no special-casing.
+         return mimalloc::mi_malloc_auto_align(layout.size(), layout.align()).cast();
+@@ -347,14 +393,15 @@ fn heap_alloc(layout: Layout) -> *mut u8 {
+         && layout.size() <= BUMP_MAX
+         && layout.align() <= mimalloc::MI_MAX_ALIGN_SIZE
+     {
+-        if let Some(p) = state.bump_alloc(layout.size(), layout.align()) {
++        // SAFETY: `state` is the live installed state.
++        if let Some(p) = unsafe { AstAllocState::bump_alloc_raw(state, layout.size(), layout.align()) } {
+             return p;
+         }
+     }
+     // SAFETY: `heap_ptr` returns the live spill heap owned by `state`, which
+     // is owned by the thread-local for the duration of this call.
+     unsafe {
+-        mimalloc::mi_heap_malloc_auto_align(state.heap_ptr(), layout.size(), layout.align()).cast()
++        mimalloc::mi_heap_malloc_auto_align(AstAllocState::heap_ptr_raw(state), layout.size(), layout.align()).cast()
+     }
+ }
+ 
+@@ -406,12 +453,12 @@ unsafe impl Allocator for AstAlloc {
+         // `allocate` + `ptr::write_bytes(0)` cannot. Never bump-carved (the
+         // chunk is uninitialised); same lifetime semantics as `heap_alloc`.
+         // Mirrors `MimallocArena::allocate_zeroed`.
+-        let p: *mut u8 = match active_state() {
++        let p: *mut u8 = match active_state_ptr() {
+             None => mimalloc::mi_zalloc_auto_align(layout.size(), layout.align()).cast(),
+             // SAFETY: `heap_ptr` returns the live spill heap owned by the
+             // installed state; see `heap_alloc`.
+             Some(state) => unsafe {
+-                mimalloc::mi_heap_zalloc_auto_align(state.heap_ptr(), layout.size(), layout.align())
++                mimalloc::mi_heap_zalloc_auto_align(AstAllocState::heap_ptr_raw(state), layout.size(), layout.align())
+                     .cast()
+             },
+         };
