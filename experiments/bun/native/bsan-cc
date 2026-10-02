@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Compiler wrapper for building vendored C/C++ libraries with BSan instrumentation outside
+# cargo: the same flags cargo-bsan's CC wrapper adds (cargo-bsan/src/phases.rs: bsan_cflags),
+# including the runtime at link time so configure-time test programs link too.
+TC=/root/.rustup/toolchains/bsan
+BSAN_CXX_MODE=; case "$(basename "$0")" in *++) BSAN_CXX_MODE=1;; esac
+exec $TC/bin/clang${BSAN_CXX_MODE:+++} "$@" -g -O0 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer \
+  -fpass-plugin=$TC/lib/libbsan_plugin.so -Qunused-arguments \
+  --ld-path=$TC/lib/rustlib/x86_64-unknown-linux-gnu/bin/gcc-ld/ld.lld \
+  -L$TC/lib -lclang_rt.bsan-x86_64 -Wl,-u,__bsan_preinit_anchor -lbsan_rt \
+  -Wl,--push-state,--no-as-needed -lpthread -lrt -lm -ldl -lresolv -lc -lunwind -Wl,--pop-state

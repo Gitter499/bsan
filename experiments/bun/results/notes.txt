@@ -1,0 +1,6 @@
+bun_collections: static_hash_map_put_get_delete_grow killed after 35min (128 seeds natively vs 2 under cfg(miri); RSS 1.4GB growing) - rerun with --skip
+OOM: bun_paths test binary killed by kernel OOM at 6.0 GB RSS (batch result invalid; rerun alone).
+bun_hash test binary reached 5.7 GB RSS after 5 min; killed manually to protect other jobs (rerun alone).
+bun_css lib compile (rustc) OOM-killed at 10.5 GB RSS while other jobs ran; rebuild alone with -j1.
+cargo-bsan: doctests of proc-macro crates fail (bun_dispatch: "can't find crate for `quote`/`syn`") — rustdoc phase issue.
+BSan perf: iter_mut().enumerate() over [u8; 6000] doesn't finish (>20s, >1.5GB) under default options; finishes in 3s/30MB with wildcard=0. Root cause: ptrtoint→__bsan_expose_prov on every iteration + expose_tag iterating all locations. Repro: repro/adler-hang.

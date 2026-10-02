@@ -1,0 +1,83 @@
+
+running 1 test
+error: Undefined Behavior: read access through <1500900>(unprotected) at alloc95322[0x8] is forbidden
+    --> /workspaces/bsan-bun/native/src/zlib/deflate.c:1203:22
+     |
+1203 | if (s->strm->avail_in == 0)
+     |              ^
+     = help: the accessed tag <1500900>(unprotected) is foreign to the protected tag <1500936>(StrongProtector) (i.e., it is not a child)
+     = help: this foreign read access would cause the protected tag <1500936>(StrongProtector) (currently Unique) to become Disabled
+     = help: protected tags must never be Disabled
+help: the accessed tag <1500900>(unprotected) was created here
+ --> 0x55ddd5ad0d61
+help: the protected tag <1500936>(StrongProtector) was created here, in the initial state Reserved
+    --> deavyicf5x53yeapc9zdaop5v:0:0
+help: the protected tag <1500936>(StrongProtector) later transitioned to Unique due to a child write access at offsets [0x8..0xc]
+    --> deavyicf5x53yeapc9zdaop5v:0:0
+     = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
+
+stack backtrace:
+0: fill_window
+      at /workspaces/bsan-bun/native/src/zlib/deflate.c:1203:22
+1: deflate_quick
+      at /workspaces/bsan-bun/native/src/zlib/deflate_quick.c:74:20
+2: deflate
+      at /workspaces/bsan-bun/native/src/zlib/deflate.c:977:18
+3: bun_zlib::step
+      at deavyicf5x53yeapc9zdaop5v
+4: <bun_zlib::DeflateEncoder>::step
+      at <null>
+5: bsan_drivers::http_compress
+      at 0a9usoxg1qqrl3pjfu7p9uxm6
+6: bsan_drivers::http_body_deflate_roundtrip
+      at 0a9usoxg1qqrl3pjfu7p9uxm6
+7: bsan_drivers::http_body_deflate_roundtrip::{closure#0}
+      at 6zxtjszaudrcrye14rec9n4p8
+8: <bsan_drivers::http_body_deflate_roundtrip::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+      at 5gck8xb3jc1ecst9nvb4as0lt
+9: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+      at test.72459290db8ea2c9-cgu.00
+10: test::__rust_begin_short_backtrace::<core::result::Result<(), alloc::string::String>, fn() -> core::result::Result<(), alloc::string::String>>
+      at test.72459290db8ea2c9-cgu.00
+11: <test::types::RunnableTest>::run
+      at test.72459290db8ea2c9-cgu.04
+12: test::run_test_in_process::{closure#0}
+      at test.72459290db8ea2c9-cgu.14
+13: <core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}> as core::ops::function::FnOnce<()>>::call_once
+      at test.72459290db8ea2c9-cgu.14
+14: std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>, core::result::Result<(), alloc::string::String>>
+      at test.72459290db8ea2c9-cgu.14
+15: std::panicking::catch_unwind::<core::result::Result<(), alloc::string::String>, core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>>
+      at test.72459290db8ea2c9-cgu.14
+16: std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>, core::result::Result<(), alloc::string::String>>
+      at test.72459290db8ea2c9-cgu.10
+17: test::run_test_in_process
+      at test.72459290db8ea2c9-cgu.00
+18: test::run_test::{closure#0}
+      at test.72459290db8ea2c9-cgu.14
+19: test::run_test::{closure#1}
+      at test.72459290db8ea2c9-cgu.14
+20: std::sys::backtrace::__rust_begin_short_backtrace::<test::run_test::{closure#1}, ()>
+      at <null>
+21: std::thread::lifecycle::spawn_unchecked::<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}
+      at test.72459290db8ea2c9-cgu.14
+22: <core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}> as core::ops::function::FnOnce<()>>::call_once
+      at test.72459290db8ea2c9-cgu.14
+23: std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()>
+      at test.72459290db8ea2c9-cgu.14
+24: std::panicking::catch_unwind::<(), core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>>
+      at test.72459290db8ea2c9-cgu.14
+25: std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()>
+      at test.72459290db8ea2c9-cgu.10
+26: std::thread::lifecycle::spawn_unchecked::<test::run_test::{closure#1}, ()>::{closure#1}
+      at test.72459290db8ea2c9-cgu.14
+27: <std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+      at test.72459290db8ea2c9-cgu.14
+28: <alloc::boxed::Box<dyn core::ops::function::FnOnce<(), Output = ()> + core::marker::Send> as core::ops::function::FnOnce<()>>::call_once
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/boxed.rs:2314:9
+29: <std::sys::thread::unix::Thread>::new::thread_start
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/thread/unix.rs:127:17
+30: bsan_thread_start(void*)
+      at /root/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan_interceptors.cpp:483:28
+31: clone
+      at misc/../sysdeps/unix/sysv/linux/x86_64/clone.S:102
