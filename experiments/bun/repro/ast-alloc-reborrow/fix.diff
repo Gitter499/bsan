@@ -1,0 +1,49 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -50,6 +50,23 @@
+             None
+         }
+     }
++
++    /// Raw-pointer variant: touches only `bump_cursor` and derives the result from the
++    /// Box's provenance, without a `&mut Self` covering `bump_chunk`.
++    unsafe fn bump_alloc_raw(this: *mut Self, size: usize, align: usize) -> Option<*mut u8> {
++        unsafe {
++            let cursor = (*this).bump_cursor;
++            let cur = (&raw mut (*this).bump_chunk).cast::<u8>().add(cursor);
++            let remaining = BUMP_CHUNK - cursor;
++            let pad = cur.align_offset(align);
++            if pad <= remaining && size <= remaining - pad {
++                (*this).bump_cursor = cursor + pad + size;
++                Some(cur.add(pad))
++            } else {
++                None
++            }
++        }
++    }
+ }
+ 
+ #[thread_local]
+@@ -60,6 +77,10 @@
+     unsafe { (*AST_ALLOC.as_ptr()).as_deref_mut() }
+ }
+ 
++fn active_state_ptr() -> Option<*mut AstAllocState> {
++    unsafe { (*AST_ALLOC.as_ptr()).as_mut().map(|b| &raw mut **b) }
++}
++
+ pub fn swap_state(state: Option<Box<AstAllocState>>) -> Option<Box<AstAllocState>> {
+     AST_ALLOC.replace(state)
+ }
+@@ -86,9 +107,9 @@
+ pub type AstVec<T> = Vec<T, AstAlloc>;
+ 
+ fn heap_alloc(layout: Layout) -> *mut u8 {
+-    let Some(state) = active_state() else { unreachable!("global mimalloc fallback") };
++    let Some(state) = active_state_ptr() else { unreachable!("global mimalloc fallback") };
+     if layout.size() != 0 && layout.size() <= BUMP_MAX {
+-        if let Some(p) = state.bump_alloc(layout.size(), layout.align()) {
++        if let Some(p) = unsafe { AstAllocState::bump_alloc_raw(state, layout.size(), layout.align()) } {
+             return p;
+         }
+     }

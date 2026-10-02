@@ -1,0 +1,48 @@
+error: Undefined Behavior: read access through <609>(unprotected) at alloc83[0x8] is forbidden
+    --> /workspaces/bsan-bun/native/src/zlib/deflate.c:1203:22
+     |
+1203 | if (s->strm->avail_in == 0)
+     |              ^
+     = help: the accessed tag <609>(unprotected) is foreign to the protected tag <650>(StrongProtector) (i.e., it is not a child)
+     = help: this foreign read access would cause the protected tag <650>(StrongProtector) (currently Unique) to become Disabled
+     = help: protected tags must never be Disabled
+help: the accessed tag <609>(unprotected) was created here
+    --> /workspaces/bsan-bun/repro/zlib-backpointer/src/main.rs:66:24
+     |
+  66 | let mut this = Self { strm: Box::new(new_zstream()) };
+     |                ^
+help: the protected tag <650>(StrongProtector) was created here, in the initial state Reserved
+    --> /workspaces/bsan-bun/repro/zlib-backpointer/src/main.rs:116:0
+     |
+ 116 | fn step(
+     | ^
+help: the protected tag <650>(StrongProtector) later transitioned to Unique due to a child write access at offsets [0x8..0xc]
+    --> /workspaces/bsan-bun/repro/zlib-backpointer/src/main.rs:131:5
+     |
+ 131 | strm.avail_in = in_len as c_uint;
+     | ^
+     = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
+
+stack backtrace:
+0: fill_window
+      at /workspaces/bsan-bun/native/src/zlib/deflate.c:1203:22
+1: deflate_medium
+      at /workspaces/bsan-bun/native/src/zlib/deflate_medium.c:182:20
+2: deflate
+      at /workspaces/bsan-bun/native/src/zlib/deflate.c:977:18
+3: zlib_backpointer::step
+      at /workspaces/bsan-bun/repro/zlib-backpointer/src/main.rs:138:23
+4: <zlib_backpointer::DeflateEncoder>::step
+      at /workspaces/bsan-bun/repro/zlib-backpointer/src/main.rs:86:9
+5: zlib_backpointer::compress_zlib_streaming
+      at /workspaces/bsan-bun/repro/zlib-backpointer/src/main.rs:156:38
+6: zlib_backpointer::main
+      at /workspaces/bsan-bun/repro/zlib-backpointer/src/main.rs:169:5
+7: <fn() as core::ops::function::FnOnce<()>>::call_once
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+8: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/backtrace.rs:166:18
+9: std::rt::lang_start::<()>::{closure#0}
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/rt.rs:206:18
+
+note: stack trace was truncated after 10 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

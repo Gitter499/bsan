@@ -1,0 +1,98 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -54,18 +54,36 @@
+         mem_level: c_int, strategy: c_int, version: *const u8, stream_size: c_int) -> ReturnCode;
+ }
+ 
++/// Heap-pinned `z_stream` accessed only through the raw pointer zlib was initialized with.
++struct ZStreamBox(core::ptr::NonNull<zStream_struct>);
++
++impl ZStreamBox {
++    fn new() -> Self {
++        Self(core::ptr::NonNull::from(Box::leak(Box::new(new_zstream()))))
++    }
++    fn ptr(&self) -> *mut zStream_struct {
++        self.0.as_ptr()
++    }
++}
++
++impl Drop for ZStreamBox {
++    fn drop(&mut self) {
++        drop(unsafe { Box::from_raw(self.0.as_ptr()) });
++    }
++}
++
+ /// RAII deflate (compression) stream. `deflateEnd` on drop.
+ pub struct DeflateEncoder {
+-    strm: Box<zStream_struct>,
++    strm: ZStreamBox,
+ }
+ 
+ impl DeflateEncoder {
+     pub fn new(level: c_int, window_bits: c_int, mem_level: c_int, strategy: c_int) -> Self {
+-        let mut this = Self { strm: Box::new(new_zstream()) };
++        let this = Self { strm: ZStreamBox::new() };
+         // SAFETY: strm is fully initialized; version/size match the linked zlib.
+         let rc = unsafe {
+             deflateInit2_(
+-                &raw mut *this.strm,
++                this.strm.ptr(),
+                 level,
+                 8, // Z_DEFLATED
+                 window_bits,
+@@ -81,13 +99,13 @@
+ 
+     pub fn step(&mut self, input: &[u8], out: &mut Vec<u8>, reserve: usize, flush: FlushValue)
+         -> (usize, ReturnCode) {
+-        step(&mut self.strm, input, out, reserve, usize::MAX, flush, deflate)
++        step(self.strm.ptr(), input, out, reserve, usize::MAX, flush, deflate)
+     }
+ }
+ 
+ impl Drop for DeflateEncoder {
+     fn drop(&mut self) {
+-        unsafe { deflateEnd(&raw mut *self.strm) };
++        unsafe { deflateEnd(self.strm.ptr()) };
+     }
+ }
+ 
+@@ -112,7 +130,7 @@
+ 
+ /// Shared body of [`DeflateEncoder::step`] / [`InflateDecoder::step`].
+ fn step(
+-    strm: &mut zStream_struct,
++    strm: *mut zStream_struct,
+     input: &[u8],
+     out: &mut Vec<u8>,
+     reserve: usize,
+@@ -125,19 +143,22 @@
+     }
+ 
+     let in_len = input.len().min(u32::MAX as usize);
+-    strm.next_in = input.as_ptr();
+-    strm.avail_in = in_len as c_uint;
+-
+     let spare = out.spare_capacity_mut();
+     let out_len = spare.len().min(limit).min(u32::MAX as usize);
+-    strm.next_out = spare.as_mut_ptr().cast::<u8>();
+-    strm.avail_out = out_len as c_uint;
++    let next_out = spare.as_mut_ptr().cast::<u8>();
++    unsafe {
++        (*strm).next_in = input.as_ptr();
++        (*strm).avail_in = in_len as c_uint;
++        (*strm).next_out = next_out;
++        (*strm).avail_out = out_len as c_uint;
++    }
+ 
+-    let rc = unsafe { op(&raw mut *strm, flush) };
++    let rc = unsafe { op(strm, flush) };
+ 
+-    let produced = out_len - strm.avail_out as usize;
++    let (avail_out, avail_in) = unsafe { ((*strm).avail_out, (*strm).avail_in) };
++    let produced = out_len - avail_out as usize;
+     unsafe { out.set_len(out.len() + produced) }; // bun_core::vec::commit_spare
+-    let consumed = in_len - strm.avail_in as usize;
++    let consumed = in_len - avail_in as usize;
+     (consumed, rc)
+ }
+ 

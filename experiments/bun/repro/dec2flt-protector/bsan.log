@@ -1,0 +1,44 @@
+error: Undefined Behavior: deallocation through <372>(unprotected) (root of the allocation) at alloc86[0x0] is forbidden
+  --> /workspaces/bsan-bun/repro/dec2flt-protector/src/main.rs:17:1
+   |
+17 | }
+   | ^
+   = note: the above line calls library code, where the error was detected:
+  --> /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/alloc/unix.rs:65:14
+   |
+65 | unsafe { libc::free(ptr as *mut libc::c_void) }
+   |          ^
+   = help: the accessed tag <372>(unprotected) (root of the allocation) is foreign to the protected tag <1027>(StrongProtector) (i.e., it is not a child)
+   = help: this deallocation (acting as a foreign write access) would cause the protected tag <1027>(StrongProtector) (currently Frozen) to become Disabled
+   = help: protected tags must never be Disabled
+help: the accessed tag <372>(unprotected) was created here
+  --> /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/alloc/unix.rs:31:18
+   |
+31 | unsafe { libc::malloc(layout.size()) as *mut u8 }
+   |          ^
+help: the protected tag <1027>(StrongProtector) was created here, in the initial state Frozen
+  --> /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/num/imp/dec2flt/parse.rs:0:0
+
+stack backtrace:
+0: std::sys::alloc::unix::dealloc
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/alloc/unix.rs:65:14
+1: __rustc::__rdl_dealloc
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/alloc.rs:480:6
+2: alloc::alloc::dealloc_nonnull
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/alloc.rs:197:14
+3: <alloc::alloc::Global>::deallocate_impl_runtime
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/alloc.rs:346:22
+4: <alloc::alloc::Global>::deallocate_impl
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/alloc.rs:461:9
+5: <alloc::alloc::Global as core::alloc::Allocator>::deallocate
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/alloc.rs:580:23
+6: <alloc::raw_vec::RawVecInner>::deallocate
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:915:28
+7: <alloc::raw_vec::RawVec<u8> as core::ops::drop::Drop>::drop
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:443:29
+8: core::ptr::drop_glue::<alloc::raw_vec::RawVec<u8>>
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:848:1
+9: core::ptr::drop_glue::<alloc::vec::Vec<u8>>
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:848:1
+
+note: stack trace was truncated after 10 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

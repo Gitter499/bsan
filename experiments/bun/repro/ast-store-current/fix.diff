@@ -1,0 +1,13 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -75,9 +75,8 @@
+     fn allocate<T>(store: &mut Store) -> NonNull<T> {
+         if store.current.is_null() {
+-            let mut first = Block::new_boxed();
+-            store.current = &raw mut *first;
+-            store.head = Some(first);
++            let first = store.head.insert(Block::new_boxed());
++            store.current = &raw mut **first;
+         }
+         let current: &mut Block = unsafe { &mut *store.current };
+         Block::try_alloc::<T>(current).unwrap() // (overflow-block path elided)

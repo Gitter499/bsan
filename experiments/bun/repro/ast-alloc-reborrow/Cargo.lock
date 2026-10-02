@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "vm_selfptr"
+name = "ast-alloc-reborrow"
 version = "0.1.0"

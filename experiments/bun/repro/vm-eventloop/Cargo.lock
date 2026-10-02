@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "vm_backref"
+name = "vm-eventloop"
 version = "0.1.0"

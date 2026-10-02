@@ -3,8 +3,8 @@
 ## Summary
 * A full **BorrowSanitizer-instrumented `bun-debug`** builds with Bun's own build system and runs JS. All Rust is
   instrumented, std included; JSC/C++ is not. This was not possible a month ago.
-* **3 confirmed Bun bugs (Tree Borrows UB).** All three are on the default startup path, and each is reproduced by
-  Miri on a standalone reduction:
+* **3 confirmed Bun bugs (Tree Borrows UB).** All three are on the default startup path, and each also reproduces under BSan
+  in a crate reduced from Bun's source (`../repro/`, see `../REPRO.md`):
   - F1: `bun_ast::new_store!`
   - F2: VirtualMachine/EventLoop self-pointer aliasing. Design-level; 3 sites observed.
   - F3: `bun_alloc::ast_alloc` bump allocator.
@@ -34,10 +34,8 @@
   `reset`, which runs in release builds too, not only the `debug_assertions` poison loop) reborrows through a
   Disabled tag.
 * BSan report (bun-debug -e 'console.log(1+1)'): repro/F1-new_store.bsan.txt
-* Miri cross-check: standalone reduction repro/newstore (src/main.rs) — `MIRIFLAGS=-Zmiri-tree-borrows cargo miri run`
-  reports the identical error (tag created at `store.head = Some(first)`, Disabled by the foreign write
-  [0x0..0x28] at `ptr.as_ptr().write(data)`, UB at `as_deref_mut`). The fixed variant (repro/newstore/main_fixed.rs.txt)
-  passes Miri.
+* Reduced repro: ../repro/ast-store-current (`new_store!` from Bun, trimmed). BSan gives the same report, and its
+  fix.diff runs clean.
 * Production reachability: yes (every parse in release builds). Practical miscompilation risk is low today (Box
   `noalias` is only emitted for function parameters), but it is UB under Tree Borrows (and Stacked Borrows).
 * Fix (fix-01-new_store.patch): take the raw pointer after the move:
@@ -62,8 +60,8 @@
   `slice::as_mut_ptr` in `bump_alloc`, was Frozen by a `Box::deref_mut` reborrow of the whole state).
   Identified the reborrow site with gdb (7 `Box<AstAllocState>::deref_mut` calls between the store reset and the
   UB, no Block derefs) — gdb-trace.py, gdb2.log.
-* Miri: repro/astalloc reduction gives the identical diagnostic (created at `bump_chunk.as_mut_ptr()`, Unique by the
-  write, Frozen by the reborrow in `active_state`, UB at the write-back). The fixed variant passes.
+* Reduced repro: ../repro/ast-alloc-reborrow (`ast_alloc.rs` from Bun, trimmed). BSan reports the write-back
+  through the protected `&mut Expr` after the `active_state` reborrow, and its fix.diff (= fix-02) runs clean.
 * Production: every JS/TS parse with an AST scope installed (runtime transpiler, bundler). Practical
   miscompilation risk: low today, but it is exactly the pattern noalias-based optimisations break.
 * Fix (fix-02-ast_alloc.patch): allocation path uses a raw `*mut AstAllocState` carrying the Box's provenance
@@ -79,8 +77,8 @@
   in the report), so the shared reborrow of the whole VM is a foreign read of the protected, already-written
   (Unique/Active) `&mut EventLoop` -> Disabled while protected = UB.
 * Reached on every startup: `RunCommand::boot` -> `VirtualMachine::init` -> `EventLoop::ensure_waker`.
-* BSan report: repro/F2-eventloop-vm_ref.bsan.txt. Miri: repro/vm_backref (reduction of the same shape) reports
-  "reborrow through <tag> ... is forbidden" under `-Zmiri-tree-borrows`.
+* BSan report: repro/F2-eventloop-vm_ref.bsan.txt. Reduced repro: ../repro/vm-eventloop `--bin ensure_waker`
+  (Bun's VirtualMachine/EventLoop code, trimmed), with the same diagnostic.
 * Same root cause, many sites: event_loop.rs has 30 `self.vm_ref()` calls inside `&mut self`/`*mut` methods, and
   several `self.vm_ref().as_mut()` where `VirtualMachine::as_mut(&self) -> &mut VirtualMachine`
   (VirtualMachine.rs:964) mints a `&mut` to the whole VM from the thread-local root pointer while `&self` /
@@ -99,7 +97,8 @@
   `wait_for_promise` -> `event_loop_mut()` (= `&mut *self.event_loop`, the `VirtualMachine.event_loop`
   self-pointer created from the VM root pointer in `init`) -> `EventLoop::tick` writes
   `entered_event_loop_count` (event_loop.rs:770): foreign write to a protected `&mut` = UB
-  (repro/F2c-run-start-event_loop.bsan.txt; Miri reduction repro/vm_selfptr, same diagnostic).
+  (repro/F2c-run-start-event_loop.bsan.txt; reduced repro ../repro/vm-eventloop `--bin run_start`. With every
+  protector on, it fires first at the innermost one on the same path, `VirtualMachine::wait_for_promise(&mut self)`).
   So the root cause is the VM's self/singleton raw pointers (`VirtualMachine.event_loop`, the thread-local VM
   pointer behind `VirtualMachine::get/as_mut`, `EventLoop.virtual_machine`) coexisting with `&mut VirtualMachine`
   / `&mut EventLoop` borrows; it fires on every program run (first event-loop tick). The other ~28 `vm_ref()` /
@@ -141,7 +140,7 @@
   a Bun TU, and the config pointer was written by the uninstrumented WebKit prebuilt. Report: "trying to access an
   allocation that has been freed" in `std::bit_cast`. Same mechanism as FP1/FP2. Report: repro/FP3-*.bsan.txt.
 * Not hit here, reported by the coordinator: `str::parse::<f64>()` from a heap buffer gives a protector report in
-  core::num::dec2flt (BSan FP, Miri-clean).
+  core::num::dec2flt (BSan FP: it is safe code, see ../repro/dec2flt-protector).
 
 ## Approach (chosen: build a BSan-instrumented `bun-debug` with Bun's own build system)
 
@@ -212,8 +211,7 @@ Everything is under /home/user/bsan-bun/jsc/.
    - `BSAN_INSTRUMENT_CXX=1`: the last binary was built with it; unset it to get back to the FP2 state.
    - `BSAN_RUST_DEBUGINFO=line-tables-only`
 5. Run `source env.sh; build/debug/bun-debug -e 'console.log(1+1)'`. For tests: `run-tests.sh list-batch1.txt <outdir>`.
-6. Miri repros: `cd repro/<name>; MIRIFLAGS=-Zmiri-tree-borrows cargo +bsan miri run`. The output is saved in
-   miri-output.txt, and the fixed variants are in main_fixed.rs.txt.
+6. Reduced repros (BSan): `../repro/run-all.sh`, see ../REPRO.md.
 Helper scripts:
 - run-unit.py: re-runs one planned rustc unit, for the memory experiments.
 - gdb-trace.py: address breakpoints with short backtraces. This is how I found F3's reborrow site (gdb2.log).
