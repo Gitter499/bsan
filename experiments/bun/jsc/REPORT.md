@@ -4,7 +4,7 @@
 * A full **BorrowSanitizer-instrumented `bun-debug`** builds with Bun's own build system and runs JS. All Rust is
   instrumented, std included; JSC/C++ is not. This was not possible a month ago.
 * **3 confirmed Bun bugs (Tree Borrows UB).** All three are on the default startup path, and each also reproduces under BSan
-  in a crate reduced from Bun's source (`../repro/`, see `../REPRO.md`):
+  in a small test on Bun's own code (see `../REPRO.md`):
   - F1: `bun_ast::new_store!`
   - F2: VirtualMachine/EventLoop self-pointer aliasing. Design-level; 3 sites observed.
   - F3: `bun_alloc::ast_alloc` bump allocator.
@@ -34,8 +34,7 @@
   `reset`, which runs in release builds too, not only the `debug_assertions` poison loop) reborrows through a
   Disabled tag.
 * BSan report (bun-debug -e 'console.log(1+1)'): repro/F1-new_store.bsan.txt
-* Reduced repro: ../repro/ast-store-current (`new_store!` from Bun, trimmed). BSan gives the same report, and its
-  fix.diff runs clean.
+* Repro: Bun's own `bun_parsers` test `json::tests::env_json` (../REPRO.md).
 * Production reachability: yes (every parse in release builds). Practical miscompilation risk is low today (Box
   `noalias` is only emitted for function parameters), but it is UB under Tree Borrows (and Stacked Borrows).
 * Fix (fix-01-new_store.patch): take the raw pointer after the move:
@@ -60,15 +59,14 @@
   `slice::as_mut_ptr` in `bump_alloc`, was Frozen by a `Box::deref_mut` reborrow of the whole state).
   Identified the reborrow site with gdb (7 `Box<AstAllocState>::deref_mut` calls between the store reset and the
   UB, no Block derefs) — gdb-trace.py, gdb2.log.
-* Reduced repro: ../repro/ast-alloc-reborrow (`ast_alloc.rs` from Bun, trimmed). BSan reports the write-back
-  through the protected `&mut Expr` after the `active_state` reborrow, and its fix.diff (= fix-02) runs clean.
+* Repro: `bun_alloc` test `tests/bsan_repro.rs` (../bun-patches/0004-bsan-repro-tests.patch); passes with the fix.
 * Production: every JS/TS parse with an AST scope installed (runtime transpiler, bundler). Practical
   miscompilation risk: low today, but it is exactly the pattern noalias-based optimisations break.
-* Fix (fix-02-ast_alloc.patch): allocation path uses a raw `*mut AstAllocState` carrying the Box's provenance
+* Fix (../bun-patches/fix-ast-alloc.patch; also removes the then-unused `bump_alloc`/`heap_ptr`): allocation path uses a raw `*mut AstAllocState` carrying the Box's provenance
   (`&raw mut **box`) and touches only `bump_cursor`/`spill` through raw place expressions
   (`bump_alloc_raw`, `heap_ptr_raw`, `active_state_ptr`). Alternative: keep the chunk in a separately allocated
   buffer referenced by a raw pointer.
-* BSan clean with fix: yes. With fix-02 the run gets past the parser; the next reports are FP1 / F2b, not F3.
+* BSan clean with fix: yes. With the fix the run gets past the parser; the next reports are FP1 / F2b, not F3.
 
 #### F2. bun_jsc `EventLoop` (embedded in `VirtualMachine`) reborrows its whole parent VM while `&mut self` is live (Tree Borrows UB; design-level, pervasive)
 * Where: src/jsc/event_loop.rs `EventLoop::ensure_waker(&mut self)` (line 1062): writes `self.uws_loop`, then
@@ -140,7 +138,7 @@
   a Bun TU, and the config pointer was written by the uninstrumented WebKit prebuilt. Report: "trying to access an
   allocation that has been freed" in `std::bit_cast`. Same mechanism as FP1/FP2. Report: repro/FP3-*.bsan.txt.
 * Not hit here, reported by the coordinator: `str::parse::<f64>()` from a heap buffer gives a protector report in
-  core::num::dec2flt (BSan FP: it is safe code, see ../repro/dec2flt-protector).
+  core::num::dec2flt (BSan FP: it is safe code, Bun's `json::tests::lenient_numbers`, ../REPRO.md).
 
 ## Approach (chosen: build a BSan-instrumented `bun-debug` with Bun's own build system)
 
@@ -200,7 +198,7 @@ Everything is under /home/user/bsan-bun/jsc/.
    - the build changes: scripts/build/bsan.ts, rust.ts, rust/units.ts, flags.ts, deps/mimalloc.ts;
    - the allocator cfgs and the coordinator's toolchain-compat changes;
    - fixes 01/02/03 and the no-instrument pragma in workaround-missing-symbols.cpp.
-   The standalone fix patches are fix-01-new_store.patch and fix-02-ast_alloc.patch; both were checked to
+   The standalone fix patches are fix-01-new_store.patch and ../bun-patches/fix-ast-alloc.patch; both were checked to
    `git apply` cleanly on upstream. fix-03-ensure_waker-partial.patch is only partial.
 3. With env.sh sourced, run `bun run build --asan=off --configure-only`, then
    `prefetch-tarballs.sh build/debug/build.ninja build/cache/tarballs`. The prefetch is git-based because codeload
@@ -211,7 +209,7 @@ Everything is under /home/user/bsan-bun/jsc/.
    - `BSAN_INSTRUMENT_CXX=1`: the last binary was built with it; unset it to get back to the FP2 state.
    - `BSAN_RUST_DEBUGINFO=line-tables-only`
 5. Run `source env.sh; build/debug/bun-debug -e 'console.log(1+1)'`. For tests: `run-tests.sh list-batch1.txt <outdir>`.
-6. Reduced repros (BSan): `../repro/run-all.sh`, see ../REPRO.md.
+6. Repros: `../repro/run.sh`, see ../REPRO.md.
 Helper scripts:
 - run-unit.py: re-runs one planned rustc unit, for the memory experiments.
 - gdb-trace.py: address breakpoints with short backtraces. This is how I found F3's reborrow site (gdb2.log).

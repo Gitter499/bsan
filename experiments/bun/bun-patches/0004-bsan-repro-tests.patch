@@ -1,0 +1,44 @@
+diff --git a/src/bun_alloc/tests/bsan_repro.rs b/src/bun_alloc/tests/bsan_repro.rs
+new file mode 100644
+index 00000000..79187ce5
+--- /dev/null
++++ b/src/bun_alloc/tests/bsan_repro.rs
+@@ -0,0 +1,21 @@
++// BSan repro: the parser's AST allocation pattern (js_parser visit_expr.rs `e_call` -> `e_binary`).
++use bun_alloc::ast_alloc::{AstAlloc, AstVec, ScopedAstAlloc};
++use bun_alloc::MimallocArena;
++
++fn visit(e: &mut [u64; 2]) {
++    let mut more: AstVec<[u64; 2]> = AstAlloc::vec_with_capacity(4); // visiting allocates AST data
++    more.push(*e);
++    *e = [e[0] + 1, e[1]]; // `*e = current`
++}
++
++#[test]
++fn ast_vec_write_after_alloc() {
++    let arena = MimallocArena::new();
++    let _scope = ScopedAstAlloc::with_spill(arena.heap_ptr());
++    let mut args: AstVec<[u64; 2]> = AstAlloc::vec_with_capacity(2);
++    args.push([1, 0]);
++    args.push([2, 0]);
++    for arg in args.iter_mut() {
++        visit(arg);
++    }
++}
+diff --git a/src/zlib/tests/bsan_repro.rs b/src/zlib/tests/bsan_repro.rs
+new file mode 100644
+index 00000000..c8aca99b
+--- /dev/null
++++ b/src/zlib/tests/bsan_repro.rs
+@@ -0,0 +1,11 @@
++// BSan repro: gzip body compression, as in http/compress_body.rs `compress_zlib_streaming`.
++use bun_zlib::{DeflateEncoder, FlushValue, ReturnCode};
++
++#[test]
++fn deflate_encoder_step() {
++    let input = b"hello world ".repeat(100);
++    let mut out = Vec::new();
++    let mut encoder = DeflateEncoder::new(6, 15 + 16, 8, 0).unwrap();
++    let (_, rc) = encoder.step(&input, &mut out, 64 * 1024, FlushValue::Finish);
++    assert_eq!(rc, ReturnCode::StreamEnd);
++}

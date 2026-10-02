@@ -8,14 +8,12 @@ BorrowSanitizer (BSan) run on [Bun](https://github.com/oven-sh/bun) at `bc7a813b
 |---|---|---|---|
 | 1 | `bun_zlib` (gzip/deflate, WebSocket compression) | zlib writes through its saved stream pointer while Rust holds `&mut` to the stream | [patch](bun-patches/fix-zlib-deflate-backpointer.patch) |
 | 2 | `bun_ast` node store (every parse) | pointer taken from a `Box`, then the `Box` is moved | [patch](bun-patches/fix-ast-store-current.patch) |
-| 3 | `bun_alloc` AST allocator (every parse) | each allocation reborrows the whole arena, invalidating earlier pointers | [patch](jsc/fix-02-ast_alloc.patch) |
+| 3 | `bun_alloc` AST allocator (every parse) | each allocation reborrows the whole arena, invalidating earlier pointers | [patch](bun-patches/fix-ast-alloc.patch) |
 | 4 | `bun_jsc` VM / event loop (every run) | VM ↔ event-loop self-pointers used while `&mut` is live | partial ([patch](jsc/fix-03-ensure_waker-partial.patch)); a full fix needs a refactor |
 
 All four are aliasing UB (Tree Borrows). None is known to crash today, but the
-compiler is allowed to miscompile them. With its fix applied, each one runs
-clean under BSan.
-
-Repros: [REPRO.md](REPRO.md).
+compiler is allowed to miscompile them. Bugs 1–3 reproduce on Bun's own code,
+and their fixes make the repros pass: [REPRO.md](REPRO.md).
 
 ## BSan issues found: 6
 

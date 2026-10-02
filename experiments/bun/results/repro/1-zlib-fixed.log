@@ -1,0 +1,9 @@
+   Compiling bun_zlib v0.0.0 (/workspaces/bun/src/zlib)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.79s
+     Running tests/bsan_repro.rs (target/bsan/x86_64-unknown-linux-gnu/debug/build/bun_zlib/8b745d169b1b9b34/out/bsan_repro-8b745d169b1b9b34)
+
+running 1 test
+test deflate_encoder_step ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+

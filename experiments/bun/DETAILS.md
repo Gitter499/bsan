@@ -12,17 +12,16 @@ aliasing/memory bugs that Miri cannot reach.
 
 ## Findings
 
-| # | Bun bug | Found by | Reduced repro (BSan, from Bun's source) | Fix |
+| # | Bun bug | Found by | Repro ([REPRO.md](REPRO.md)) | Fix |
 |---|---|---|---|---|
-| 1 | `bun_zlib`: zlib-ng's stored `z_stream` back-pointer vs. protected `&mut` (HTTP/WebSocket compression, `Bun.deflateSync`/`gzipSync`) | BSan, driver tests | [`repro/zlib-backpointer`](repro/zlib-backpointer); fix clean | `bun-patches/fix-zlib-deflate-backpointer.patch` |
-| 2 | `bun_ast` `new_store!`: `current` taken from a `Box` before it is moved (every parse) | BSan, Bun's `bun_parsers` tests + runtime run | [`repro/ast-store-current`](repro/ast-store-current); fix clean | `bun-patches/fix-ast-store-current.patch` |
-| 3 | `bun_alloc::ast_alloc`: each allocation reborrows the whole state, freezing earlier bump allocations (every parse) | BSan, runtime run | [`repro/ast-alloc-reborrow`](repro/ast-alloc-reborrow); fix clean | `jsc/fix-02-ast_alloc.patch` |
-| 4 | `bun_jsc` VirtualMachine/EventLoop: `&VirtualMachine` / self-pointer writes while a protected `&mut` to an embedded part is live (3 sites observed; ~28 more match the pattern, unconfirmed) | BSan, runtime run | [`repro/vm-eventloop`](repro/vm-eventloop) (2 sites) | partial: `jsc/fix-03-ensure_waker-partial.patch` |
+| 1 | `bun_zlib`: zlib-ng's stored `z_stream` back-pointer vs. protected `&mut` (HTTP/WebSocket compression, `Bun.deflateSync`/`gzipSync`) | BSan, driver tests | `bun_zlib` test `bsan_repro`; passes with fix | `bun-patches/fix-zlib-deflate-backpointer.patch` |
+| 2 | `bun_ast` `new_store!`: `current` taken from a `Box` before it is moved (every parse) | BSan, Bun's `bun_parsers` tests + runtime run | Bun's test `json::tests::env_json`; passes with fix | `bun-patches/fix-ast-store-current.patch` |
+| 3 | `bun_alloc::ast_alloc`: each allocation reborrows the whole state, freezing earlier bump allocations (every parse) | BSan, runtime run | `bun_alloc` test `bsan_repro`; passes with fix | `bun-patches/fix-ast-alloc.patch` |
+| 4 | `bun_jsc` VirtualMachine/EventLoop: `&VirtualMachine` / self-pointer writes while a protected `&mut` to an embedded part is live (3 sites observed; ~28 more match the pattern, unconfirmed) | BSan, runtime run | instrumented `bun-debug` only (`jsc/`) | partial: `jsc/fix-03-ensure_waker-partial.patch` |
 
-Every finding has a small crate under [`repro/`](repro): Bun's own code on
-the failing path, with everything else deleted (no mocks), run under BSan.
-[`repro/run-all.sh`](repro/run-all.sh) runs each crate before and after its
-fix. See [REPRO.md](REPRO.md).
+Bugs 1–3 reproduce on Bun's own code: a Bun test, or a ~10-line test added by
+[`bun-patches/0004-bsan-repro-tests.patch`](bun-patches/0004-bsan-repro-tests.patch).
+[`repro/run.sh`](repro/run.sh) runs each before and after its fix. See [REPRO.md](REPRO.md).
 
 Findings 3–4 come from the runtime run (a BSan-instrumented `bun-debug` built
 with Bun's own build system); details and reports are in
@@ -33,8 +32,7 @@ provenance for pointers written by uninstrumented C++), see the report.
 ### Bun bug: zlib-ng's stored `z_stream` back-pointer vs. protected `&mut` (Tree Borrows UB)
 
 **Status: confirmed** by BSan on Bun's real code against instrumented zlib-ng,
-and in the reduced crate [`repro/zlib-backpointer`](repro/zlib-backpointer).
-The proposed fix makes both clean.
+and by the test `bun_zlib/tests/bsan_repro.rs`. The proposed fix makes both clean.
 
 zlib-ng's `deflateInit2_` stores the `z_stream*` it is given in its internal
 state (`s->strm = strm`), and `deflate()` later reads and writes the stream
@@ -111,13 +109,9 @@ stack backtrace:
 (Offsets: `next_in` is at 0x0 and `avail_in` at 0x8 of `z_stream`; in
 `ZlibCompressorArrayList` the stream starts at 0x8, after `list_ptr`.)
 
-**Reduced repro.** [`repro/zlib-backpointer`](repro/zlib-backpointer) is
-`DeflateEncoder`/`step`/`compress_zlib_streaming` taken from Bun and trimmed,
-linked against the real instrumented zlib-ng with no mock. BSan reports the same
-violation: the accessed tag was created at `Box::new(new_zstream())`, the
-protected tag is `step`'s `strm`, and it became Unique after the write to
-`avail_in` at `[0x8..0xc]`. The read is in `fill_window`, `deflate.c:1203`.
-With `fix.diff` the crate runs clean. See [REPRO.md](REPRO.md).
+**Repro.** `src/zlib/tests/bsan_repro.rs` (patch 0004) makes the same calls as
+`compress_zlib_streaming`: `DeflateEncoder::new` + `step`. BSan reports the
+read in `fill_window` (`deflate.c:1203`); with the fix the test passes.
 
 **Fix.** [`bun-patches/fix-zlib-deflate-backpointer.patch`](bun-patches/fix-zlib-deflate-backpointer.patch):
 keep each `z_stream` in its own heap allocation behind a raw pointer
@@ -134,9 +128,7 @@ including `undocumented_unsafe_blocks`) is clean.
 
 **Status: confirmed** — found independently by the runtime run
 ([`jsc/`](jsc/REPORT.md), on every `bun-debug` startup) and by Bun's own
-`bun_parsers` unit tests under BSan (21 of 38 tests report it). It also
-reproduces in the reduced crate [`repro/ast-store-current`](repro/ast-store-current),
-and the fix makes both clean.
+`bun_parsers` unit tests under BSan (21 of 38 tests report it). The fix makes them pass.
 
 `Store::allocate` (`src/ast/new_store.rs`, the arena behind every
 `Expr`/`Stmt` store) does
@@ -172,9 +164,7 @@ stack backtrace:
 
 Bun's Miri CI cannot run this test (`can't call foreign function mi_heap_new`,
 because the arena allocates through mimalloc), which is how the bug got past
-it. [`repro/ast-store-current`](repro/ast-store-current) is `new_store!`
-expanded for one node type and driven like a parse (`append`, then `reset`).
-BSan reports the same reborrow in `reset`.
+it. Repro: Bun's own `json::tests::env_json`.
 **Fix:** [`bun-patches/fix-ast-store-current.patch`](bun-patches/fix-ast-store-current.patch)
 — derive `current` from the Box after it is stored (`Option::insert`).
 
@@ -190,7 +180,7 @@ iteration, hostile tarballs).
 ## BorrowSanitizer issues found along the way
 
 1. **Exposure bookkeeping makes ordinary loops quadratic and GB-sized.**
-   [`repro/adler-hang`](repro/adler-hang): `for (i, b) in [0u8; 6000].iter_mut().enumerate() { *b = i as u8 }`
+   A loop like `for (i, b) in [0u8; 6000].iter_mut().enumerate() { *b = i as u8 }`
    finishes natively in microseconds, but under BSan
    (default options) runs >20 s and grows past 1.5 GB (Bun's own
    `bun_hash::adler32::tests::very_long_with_variation` reached 5.7 GB; the
@@ -219,11 +209,9 @@ iteration, hostile tarballs).
    in `bsan_rustflags` makes rustc copy the runtime's 176 objects (~3 MB) into
    each crate's rlib, which adds up on a 100-crate workspace.
 5. **False positive: float parsing leaves a protector alive.**
-   [`repro/dec2flt-protector`](repro/dec2flt-protector) is Bun's
-   `parse_number_text` underscore branch (`json_stage2.rs`): collect the digits
-   into a `Vec`, `str::from_utf8(&v)?.parse::<f64>()`, drop the `Vec`. It is
-   compiled under `#![forbid(unsafe_code)]`, so any UB report on it is a BSan
-   false positive. BSan reports "deallocation through <tag> (root of the
+   Bun's `parse_number_text` (`json_stage2.rs`, safe code): collect the digits
+   into a `Vec`, `str::from_utf8(&v)?.parse::<f64>()`, drop the `Vec`. Safe
+   code cannot have UB, so the report is a BSan false positive. BSan reports "deallocation through <tag> (root of the
    allocation) … would cause the protected tag <tag>(StrongProtector)
    (currently Frozen) to become Disabled", with the protected tag created in
    `core::num::dec2flt::parse.rs` (line 0). In Bun it fires in `bun_parsers`

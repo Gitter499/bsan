@@ -1,19 +1,43 @@
 diff --git a/src/bun_alloc/ast_alloc.rs b/src/bun_alloc/ast_alloc.rs
-index c8321d11..a131e85f 100644
+index c8321d11..62a72e01 100644
 --- a/src/bun_alloc/ast_alloc.rs
 +++ b/src/bun_alloc/ast_alloc.rs
-@@ -135,6 +135,44 @@ impl AstAllocState {
-         }
+@@ -103,50 +103,45 @@ impl AstAllocState {
+         self.spill = heap;
      }
  
+-    /// Carve `size` bytes at `align` (a power of two `<= MI_MAX_ALIGN_SIZE`)
+-    /// from the inline chunk. `None` when it doesn't fit — there is no refill;
+-    /// the caller falls through to the spill heap.
++
 +    /// BSAN-FIX: raw-pointer variant of [`Self::bump_alloc`]. Touches only `bump_cursor` and derives the
 +    /// returned pointer from the state's own (Box) provenance, without materialising a `&mut Self` that
 +    /// covers `bump_chunk` — such a reborrow is a foreign read for every block handed out earlier
 +    /// (freezing them under Tree Borrows, so a later write through them is UB).
-+    #[inline]
+     #[inline]
+-    fn bump_alloc(&mut self, size: usize, align: usize) -> Option<*mut u8> {
 +    unsafe fn bump_alloc_raw(this: *mut Self, size: usize, align: usize) -> Option<*mut u8> {
-+        debug_assert!(size != 0 && size <= BUMP_MAX && align.is_power_of_two());
-+        debug_assert!(align <= mimalloc::MI_MAX_ALIGN_SIZE);
+         debug_assert!(size != 0 && size <= BUMP_MAX && align.is_power_of_two());
+         debug_assert!(align <= mimalloc::MI_MAX_ALIGN_SIZE);
+-        debug_assert!(self.bump_cursor <= BUMP_CHUNK);
+-        // SAFETY: `bump_cursor <= BUMP_CHUNK` (invariant: only advanced below
+-        // after the bounds check), so `add` is at most one-past-the-end.
+-        let cur = unsafe {
+-            self.bump_chunk
+-                .as_mut_ptr()
+-                .cast::<u8>()
+-                .add(self.bump_cursor)
+-        };
+-        let remaining = BUMP_CHUNK - self.bump_cursor;
+-        let pad = cur.align_offset(align);
+-        if pad <= remaining && size <= remaining - pad {
+-            // SAFETY: `pad + size <= remaining`, so `cur + pad` and
+-            // `cur + pad + size` stay within `bump_chunk` (one-past-the-end at
+-            // most).
+-            unsafe {
+-                let aligned = cur.add(pad);
+-                self.bump_cursor += pad + size;
+-                Some(aligned)
 +        // SAFETY: caller passes the live installed state.
 +        unsafe {
 +            let cursor = (*this).bump_cursor;
@@ -26,12 +50,20 @@ index c8321d11..a131e85f 100644
 +                Some(cur.add(pad))
 +            } else {
 +                None
-+            }
-+        }
-+    }
-+
+             }
+-        } else {
+-            None
+         }
+     }
+ 
+-    /// The state's spill `mi_heap_t`: the borrowed target installed by
+-    /// [`Self::set_spill_heap`], or a lazily created owned heap when none was
+-    /// provided.
 +    /// BSAN-FIX: raw-pointer variant of [`Self::heap_ptr`] (see [`Self::bump_alloc_raw`]).
-+    #[inline]
+     #[inline]
+-    fn heap_ptr(&mut self) -> *mut mimalloc::Heap {
+-        if !self.spill.is_null() {
+-            return self.spill;
 +    unsafe fn heap_ptr_raw(this: *mut Self) -> *mut mimalloc::Heap {
 +        // SAFETY: caller passes the live installed state; only the `spill`/`owned_spill` fields are borrowed.
 +        unsafe {
@@ -41,13 +73,16 @@ index c8321d11..a131e85f 100644
 +            let heap = (*this).owned_spill.insert(MimallocArena::new()).heap_ptr();
 +            (*this).spill = heap;
 +            heap
-+        }
-+    }
+         }
+-        let heap = self.owned_spill.insert(MimallocArena::new()).heap_ptr();
+-        self.spill = heap;
+-        heap
+     }
 +
-     /// The state's spill `mi_heap_t`: the borrowed target installed by
-     /// [`Self::set_spill_heap`], or a lazily created owned heap when none was
-     /// provided.
-@@ -177,6 +215,14 @@ fn active_state<'a>() -> Option<&'a mut AstAllocState> {
+ }
+ 
+ // ── Thread-local active state ────────────────────────────────────────────────
+@@ -177,6 +172,14 @@ fn active_state<'a>() -> Option<&'a mut AstAllocState> {
      unsafe { (*AST_ALLOC.as_ptr()).as_deref_mut() }
  }
  
@@ -62,7 +97,7 @@ index c8321d11..a131e85f 100644
  /// Take the recycled spare state for this thread, or allocate a fresh one.
  #[inline]
  pub fn acquire_state() -> Box<AstAllocState> {
-@@ -333,7 +379,7 @@ use crate::alloc_result;
+@@ -333,7 +336,7 @@ use crate::alloc_result;
  
  #[inline(always)]
  fn heap_alloc(layout: Layout) -> *mut u8 {
@@ -71,7 +106,7 @@ index c8321d11..a131e85f 100644
          // Global fallback (no AST scope active). `mi_malloc` tolerates
          // `size == 0` (unique non-null pointer), so no special-casing.
          return mimalloc::mi_malloc_auto_align(layout.size(), layout.align()).cast();
-@@ -347,14 +393,15 @@ fn heap_alloc(layout: Layout) -> *mut u8 {
+@@ -347,14 +350,15 @@ fn heap_alloc(layout: Layout) -> *mut u8 {
          && layout.size() <= BUMP_MAX
          && layout.align() <= mimalloc::MI_MAX_ALIGN_SIZE
      {
@@ -89,7 +124,7 @@ index c8321d11..a131e85f 100644
      }
  }
  
-@@ -406,12 +453,12 @@ unsafe impl Allocator for AstAlloc {
+@@ -406,12 +410,12 @@ unsafe impl Allocator for AstAlloc {
          // `allocate` + `ptr::write_bytes(0)` cannot. Never bump-carved (the
          // chunk is uninitialised); same lifetime semantics as `heap_alloc`.
          // Mirrors `MimallocArena::allocate_zeroed`.

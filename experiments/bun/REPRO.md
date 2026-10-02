@@ -1,44 +1,48 @@
 # Repros
 
-Each crate in [`repro/`](repro) is Bun's own code, cut down to the buggy path.
-They run under BSan.
+All repros run on Bun's own code. We ship no reduced copies. Bugs 1 and 3 use a
+~10-line test added to the affected Bun crate
+([`0004-bsan-repro-tests.patch`](bun-patches/0004-bsan-repro-tests.patch)).
+Bug 2 is hit by one of Bun's existing tests.
 
-## Run all
+## Run
 
-In the container:
-
-```sh
-/workspaces/bsan-bun/repro/run-all.sh
-```
-
-This runs each crate as-is (expect a BSan report) and with its `fix.diff`
-applied (expect a clean run). The last result is in [`repro/run-all.txt`](repro/run-all.txt).
-
-## Run one
+Set up once (Bun checkout, BSan toolchain, instrumented C libraries):
 
 ```sh
-cd repro/<crate>
-cargo +bsan bsan run                           # reports
-patch -p1 < fix.diff && cargo +bsan bsan run   # clean
-patch -p1 -R < fix.diff                        # undo
+hpc/setup.sh fetch && hpc/setup.sh build
 ```
 
-`vm-eventloop` has two binaries:
+Then run the repros:
 
-- `--bin ensure_waker`. Its fix is `--features ensure-waker-fix`.
-- `--bin run_start --features ensure-waker-fix`. It has no fix.
+```sh
+hpc/run.sh /workspaces/bsan-bun/repro/run.sh
+```
 
-## Crates
+Each case runs the test as Bun ships it (expect a BSan report), then with the
+fix applied (expect a pass). Logs go to `logs/repro/`.
 
-| Crate | Bug | Log |
+Last result ([`results/repro/`](results/repro)):
+
+```
+1-zlib                  want=report got=report ok
+1-zlib-fixed            want=pass   got=pass   ok
+2-ast-store             want=report got=report ok
+2-ast-store-fixed       want=pass   got=pass   ok
+3-ast-alloc             want=report got=report ok
+3-ast-alloc-fixed       want=pass   got=pass   ok
+fp-float-parse          want=report got=report ok   (BSan false positive)
+```
+
+## Cases
+
+| Case | Bun test | Fix |
 |---|---|---|
-| `zlib-backpointer` | zlib writes through its saved stream pointer while Rust holds `&mut` | `bsan.log` |
-| `ast-store-current` | pointer taken from a `Box`, then the `Box` is moved | `bsan.log` |
-| `ast-alloc-reborrow` | each allocation reborrows the whole arena, invalidating earlier pointers | `bsan.log` |
-| `vm-eventloop` | VM ↔ event loop self-pointers vs. live `&mut` | `ensure_waker.bsan.log`, `run_start.bsan.log` |
-| `dec2flt-protector` | **BSan false positive** (no `unsafe` code) | `bsan.log` |
-| `adler-hang` | **BSan slowdown**: hangs by default, 3 s with `BSAN_OPTIONS=wildcard=0` | — |
+| 1 zlib | `bun_zlib` `tests/bsan_repro.rs` (added) | `fix-zlib-deflate-backpointer.patch` |
+| 2 AST store | `bun_parsers` `json::tests::env_json` (Bun's) | `fix-ast-store-current.patch` |
+| 3 AST allocator | `bun_alloc` `tests/bsan_repro.rs` (added) | `fix-ast-alloc.patch` |
+| BSan false positive | `bun_parsers` `json::tests::lenient_numbers` (Bun's) | — (BSan bug) |
 
-`zlib-backpointer` needs the instrumented C libraries from `native/build-clibs.sh`.
-
-Logs from the original runs on full Bun are in [`results/`](results) and [`jsc/repro/`](jsc/repro).
+**Bug 4 (VM / event loop)** can't be hit from a unit test, because the VM needs
+JSC. It reproduces only in the BSan-instrumented `bun-debug` build: see
+[`jsc/REPORT.md`](jsc/REPORT.md). The logs are in `jsc/repro/F2*.bsan.txt`.
