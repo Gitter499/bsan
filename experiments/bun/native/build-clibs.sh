@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 N=$PWD; OUT=$N/out/clibs; mkdir -p $OUT $N/out/build
-TC=/root/.rustup/toolchains/bsan
+TC=${BSAN_TC:-${RUSTUP_HOME:-$HOME/.rustup}/toolchains/bsan}
 # ONLY="zlib libarchive" builds a subset.
 want() { [ -z "${ONLY:-}" ] || [[ " $ONLY " == *" $1 "* ]]; }
 cm() { # cm <name> <srcdir> [cmake args...]

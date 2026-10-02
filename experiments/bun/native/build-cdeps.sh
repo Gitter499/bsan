@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 BUN=${BUN:-/workspaces/bun}
 OUT=${OUT:-$PWD/out}
-TC=/root/.rustup/toolchains/bsan
+TC=${BSAN_TC:-${RUSTUP_HOME:-$HOME/.rustup}/toolchains/bsan}
 CC=$TC/bin/clang CXX=$TC/bin/clang++
 FLAGS=(-g -O0 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -fPIC)
 [ "${INSTRUMENT:-1}" = 1 ] && FLAGS+=(-fpass-plugin=$TC/lib/libbsan_plugin.so)

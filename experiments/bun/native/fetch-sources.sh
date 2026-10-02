@@ -5,7 +5,7 @@
 # release assets, matching the version Bun's WebKit ships closely enough for the C shim.
 set -euo pipefail
 cd "$(dirname "$0")"
-BUN=${BUN:-/workspaces/bun}; P=$BUN/patches; F=../scripts/fetch-dep.sh
+BUN=${BUN:-/workspaces/bun}; P=$BUN/patches; F=$(cd ../scripts && pwd)/fetch-dep.sh
 pin() { grep -oE "_COMMIT = \"[0-9a-f]+\"" "$BUN/scripts/build/deps/$1.ts" | head -1 | cut -d'"' -f2; }
 mkdir -p src && cd src
 $F highway        google/highway           "$(pin highway)"

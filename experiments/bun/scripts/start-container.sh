@@ -13,6 +13,6 @@ fi
 docker rm -f "$name" >/dev/null 2>&1 || true
 docker run -d --name "$name" --network=host \
   -e HTTPS_PROXY="${HTTPS_PROXY:-}" -e https_proxy="${HTTPS_PROXY:-}" -e NO_PROXY="${NO_PROXY:-}" -e no_proxy="${NO_PROXY:-}" \
-  -e PATH=/root/.bun/bin:/opt/llvm23/bin:/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  -e PATH=/root/.bun/bin:/root/.local/llvm23/bin:/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   -v "$bsan":/workspaces/bsan -v "$bsan/experiments/bun":/workspaces/bsan-bun -v "$bun":/workspaces/bun "$@" \
   -w /workspaces "$image" sleep infinity
