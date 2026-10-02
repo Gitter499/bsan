@@ -71,7 +71,7 @@ Results:
 - `logs/drivers-summary.txt`
 
 Any line with `reports=N>0` or `error: Undefined Behavior` needs triage: see
-`../README.md`, `../REPRO.md`, and the false-positive list in the README.
+`../README.md` and `../REPRO.md`.
 
 `job.slurm` sets `CARGO_BUILD_JOBS` to the CPU count. The default 128 GB is enough for
 `bun_css`/`bun_bundler`, which need over 10 GB per rustc process.
@@ -130,7 +130,7 @@ Alternatives:
 - **rustup message:** inside the container rustup may print
   `$HOME differs from euid-obtained home directory`. It's harmless, because `run.sh` sets
   `RUSTUP_HOME` and `CARGO_HOME` explicitly.
-- **Fast mode:** runs default to `BSAN_OPTIONS=wildcard=0` (see README, BSan issue 1).
+- **Fast mode:** runs default to `BSAN_OPTIONS=wildcard=0` (see `../README.md`, BSan issue 1).
   Use `BSAN_WILDCARD=1` to confirm a finding under BSan's default semantics.
 - **Cargo lock:** every run shares the Bun target directory, so concurrent jobs on the same
   `$STATE` serialize on cargo's lock. For parallel jobs, use separate `STATE` directories
