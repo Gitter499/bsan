@@ -1,0 +1,93 @@
+
+running 1 test
+test json::tests::env_json ... error: Undefined Behavior: reborrow through <75104>(unprotected) at alloc10719[0x0] is forbidden
+    --> /workspaces/bun/src/ast/new_store.rs:236:69
+     |
+ 236 | let mut it: Option<&mut Block> = store.head.as_deref_mut();
+     |                                             ^
+     = note: the above line calls library code, where the error was detected:
+    --> /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/boxed.rs:2299:9
+     |
+2299 | self
+     | ^
+     = help: the accessed tag <75104>(unprotected) has state Disabled which forbids this reborrow (acting as a child read access)
+help: the accessed tag <75104>(unprotected) was created here, in the initial state Reserved
+    --> /workspaces/bun/src/ast/new_store.rs:0:21
+help: the accessed tag <75104>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x28]
+    --> /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:1966:41
+     |
+1966 | intrinsics::write_via_move(dst, src)
+     |                                 ^
+     = help: this transition corresponds to a loss of read and write permissions
+
+stack backtrace:
+0: <alloc::boxed::Box<bun_ast::expr::expr_store::Block> as core::ops::deref::DerefMut>::deref_mut
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/boxed.rs:2299:9
+1: <<alloc::boxed::Box<bun_ast::expr::expr_store::Block> as core::ops::deref::DerefMut>::deref_mut as core::ops::function::FnOnce<(&mut alloc::boxed::Box<bun_ast::expr::expr_store::Block>,)>>::call_once
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+2: <core::option::Option<&mut alloc::boxed::Box<bun_ast::expr::expr_store::Block>>>::map::<&mut bun_ast::expr::expr_store::Block, <alloc::boxed::Box<bun_ast::expr::expr_store::Block> as core::ops::deref::DerefMut>::deref_mut>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/option.rs:1165:29
+3: <core::option::Option<alloc::boxed::Box<bun_ast::expr::expr_store::Block>>>::as_deref_mut
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/option.rs:1416:23
+4: <bun_ast::expr::expr_store::Store>::reset
+      at /workspaces/bun/src/ast/new_store.rs:236:69
+5: bun_ast::expr::data::Store::reset
+      at /workspaces/bun/src/ast/new_store.rs:433:17
+6: <bun_ast::StoreResetGuard as core::ops::drop::Drop>::drop
+      at /workspaces/bun/src/ast/lib.rs:3230:9
+7: core::ptr::drop_glue::<bun_ast::StoreResetGuard>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:848:1
+8: core::ptr::drop_glue::<bun_parsers::json::tests::Parsed>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:848:1
+9: bun_parsers::json::tests::env_json
+      at /workspaces/bun/src/parsers/json.rs:2137:9
+10: bun_parsers::json::tests::env_json::{closure#0}
+      at /workspaces/bun/src/parsers/json.rs:2119:18
+11: <bun_parsers::json::tests::env_json::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+12: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+13: test::__rust_begin_short_backtrace::<core::result::Result<(), alloc::string::String>, fn() -> core::result::Result<(), alloc::string::String>>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/test/src/lib.rs
+14: <test::types::RunnableTest>::run
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/test/src/types.rs:147:40
+15: test::run_test_in_process::{closure#0}
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/test/src/lib.rs:724:74
+16: <core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}> as core::ops::function::FnOnce<()>>::call_once
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:276:6
+17: std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>, core::result::Result<(), alloc::string::String>>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/panicking.rs
+18: std::panicking::catch_unwind::<core::result::Result<(), alloc::string::String>, core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/panicking.rs:544:16
+19: std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>, core::result::Result<(), alloc::string::String>>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/panic.rs:359:14
+20: test::run_test_in_process
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/test/src/lib.rs:724:27
+21: test::run_test::{closure#0}
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/test/src/lib.rs:645:43
+22: test::run_test::{closure#1}
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/test/src/lib.rs:675:82
+23: std::sys::backtrace::__rust_begin_short_backtrace::<test::run_test::{closure#1}, ()>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/backtrace.rs:169:5
+24: std::thread::lifecycle::spawn_unchecked::<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/thread/lifecycle.rs:70:13
+25: <core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}> as core::ops::function::FnOnce<()>>::call_once
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs
+26: std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/panicking.rs:575:6
+27: std::panicking::catch_unwind::<(), core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/panicking.rs
+28: std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/panic.rs:359:14
+29: std::thread::lifecycle::spawn_unchecked::<test::run_test::{closure#1}, ()>::{closure#1}
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/thread/lifecycle.rs:68:26
+30: <std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+31: <alloc::boxed::Box<dyn core::ops::function::FnOnce<(), Output = ()> + core::marker::Send> as core::ops::function::FnOnce<()>>::call_once
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/boxed.rs:2314:9
+32: <std::sys::thread::unix::Thread>::new::thread_start
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/thread/unix.rs:127:17
+33: bsan_thread_start(void*)
+      at /root/.rustup/toolchains/bsan/compiler-rt/lib/bsan/bsan_interceptors.cpp:483:28
+34: clone
+      at misc/../sysdeps/unix/sysv/linux/x86_64/clone.S:102

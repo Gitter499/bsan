@@ -1,0 +1,106 @@
+
+running 1 test
+test json::tests::lenient_numbers ... error: Undefined Behavior: deallocation through <88170>(unprotected) (root of the allocation) at alloc13372[0x0] is forbidden
+    --> /workspaces/bun/src/parsers/json_stage2.rs:1055:9
+     |
+1055 | };
+     | ^
+     = note: the above line calls library code, where the error was detected:
+    --> /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/alloc/unix.rs:65:14
+     |
+  65 | unsafe { libc::free(ptr as *mut libc::c_void) }
+     |          ^
+     = help: the accessed tag <88170>(unprotected) (root of the allocation) is foreign to the protected tag <88825>(StrongProtector) (i.e., it is not a child)
+     = help: this deallocation (acting as a foreign write access) would cause the protected tag <88825>(StrongProtector) (currently Frozen) to become Disabled
+     = help: protected tags must never be Disabled
+help: the accessed tag <88170>(unprotected) was created here
+    --> /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/alloc/unix.rs:31:18
+     |
+  31 | unsafe { libc::malloc(layout.size()) as *mut u8 }
+     |          ^
+help: the protected tag <88825>(StrongProtector) was created here, in the initial state Frozen
+    --> /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/num/imp/dec2flt/parse.rs:0:0
+
+stack backtrace:
+0: std::sys::alloc::unix::dealloc
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/alloc/unix.rs:65:14
+1: __rustc::__rdl_dealloc
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/alloc.rs:480:6
+2: alloc::alloc::dealloc_nonnull
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/alloc.rs:197:14
+3: <alloc::alloc::Global>::deallocate_impl_runtime
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/alloc.rs:346:22
+4: <alloc::alloc::Global>::deallocate_impl
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/alloc.rs:461:9
+5: <alloc::alloc::Global as core::alloc::Allocator>::deallocate
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/alloc.rs:580:23
+6: <alloc::raw_vec::RawVecInner>::deallocate
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:915:28
+7: <alloc::raw_vec::RawVec<u8> as core::ops::drop::Drop>::drop
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/raw_vec/mod.rs:443:29
+8: core::ptr::drop_glue::<alloc::raw_vec::RawVec<u8>>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:848:1
+9: core::ptr::drop_glue::<alloc::vec::Vec<u8>>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:848:1
+10: <bun_parsers::json_stage2::Parser>::parse_number_text
+      at /workspaces/bun/src/parsers/json_stage2.rs:1055:9
+11: <bun_parsers::json_stage2::Parser>::parse_number
+      at /workspaces/bun/src/parsers/json_stage2.rs:899:34
+12: <bun_parsers::json_stage2::Parser>::parse_scalar
+      at /workspaces/bun/src/parsers/json_stage2.rs:575:47
+13: <bun_parsers::json_stage2::Parser>::parse_json_value
+      at /workspaces/bun/src/parsers/json_stage2.rs:461:30
+14: <bun_parsers::json_stage2::Parser>::parse_array
+      at /workspaces/bun/src/parsers/json_stage2.rs:685:24
+15: <bun_parsers::json_stage2::Parser>::parse_value
+      at /workspaces/bun/src/parsers/json_stage2.rs:378:26
+16: bun_parsers::json::run_stage2
+      at /workspaces/bun/src/parsers/json.rs:193:23
+17: bun_parsers::json::parse_impl_in
+      at /workspaces/bun/src/parsers/json.rs:116:18
+18: bun_parsers::json::parse_impl
+      at /workspaces/bun/src/parsers/json.rs:94:5
+19: bun_parsers::json::parse_classic
+      at /workspaces/bun/src/parsers/json.rs:339:19
+20: bun_parsers::json::parse_utf8_impl::<false>
+      at /workspaces/bun/src/parsers/json.rs:325:8
+21: bun_parsers::json::parse_utf8
+      at /workspaces/bun/src/parsers/json.rs:313:5
+22: bun_parsers::json::tests::run
+      at /workspaces/bun/src/parsers/json.rs:1077:28
+23: bun_parsers::json::tests::lenient_numbers
+      at /workspaces/bun/src/parsers/json.rs:1402:21
+24: bun_parsers::json::tests::lenient_numbers::{closure#0}
+      at /workspaces/bun/src/parsers/json.rs:1388:25
+25: <bun_parsers::json::tests::lenient_numbers::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+26: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+27: test::__rust_begin_short_backtrace::<core::result::Result<(), alloc::string::String>, fn() -> core::result::Result<(), alloc::string::String>>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/test/src/lib.rs
+28: <test::types::RunnableTest>::run
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/test/src/types.rs:147:40
+29: test::run_test_in_process::{closure#0}
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/test/src/lib.rs:724:74
+30: <core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}> as core::ops::function::FnOnce<()>>::call_once
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:276:6
+31: std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>, core::result::Result<(), alloc::string::String>>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/panicking.rs
+32: std::panicking::catch_unwind::<core::result::Result<(), alloc::string::String>, core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/panicking.rs:544:16
+33: std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>, core::result::Result<(), alloc::string::String>>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/panic.rs:359:14
+34: test::run_test_in_process
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/test/src/lib.rs:724:27
+35: test::run_test::{closure#0}
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/test/src/lib.rs:645:43
+36: test::run_test::{closure#1}
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/test/src/lib.rs:675:82
+37: std::sys::backtrace::__rust_begin_short_backtrace::<test::run_test::{closure#1}, ()>
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/backtrace.rs:169:5
+38: std::thread::lifecycle::spawn_unchecked::<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/thread/lifecycle.rs:70:13
+39: <core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}> as core::ops::function::FnOnce<()>>::call_once
+      at /root/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs
+
+note: stack trace was truncated after 40 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

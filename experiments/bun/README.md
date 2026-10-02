@@ -106,7 +106,7 @@ stack backtrace:
 (Offsets: `next_in` is at 0x0 and `avail_in` at 0x8 of `z_stream`; in
 `ZlibCompressorArrayList` the stream starts at 0x8, after `list_ptr`.)
 
-**Miri cross-check.** [`repro/zlib-backpointer`](repro/zlib-backpointer) is a
+**Miri cross-check.** See [REPRO.md](REPRO.md) for step-by-step reproduction and the raw logs. [`repro/zlib-backpointer`](repro/zlib-backpointer) is a
 pure-Rust replica: `DeflateEncoder`/`step` copied from `bun_zlib`, against a
 mock `deflate` that, like zlib-ng, stores the stream pointer at init and writes
 through it later. `MIRIFLAGS=-Zmiri-tree-borrows cargo +bsan miri test`
