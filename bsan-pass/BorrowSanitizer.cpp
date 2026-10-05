@@ -170,11 +170,11 @@ struct ProvenanceOffset {
     Val = ConstantInt::get(Ty, Bytes);
   }
 
+  operator Value *() const { return Val; }
+
   static ProvenanceOffset alignDown(IRBuilder<> &IRB, Value *V) {
     const uint64_t ProvAlign = kMinProvAlignment.value();
-    Value *Rounded =
-        IRB.CreateAnd(V, ConstantInt::get(V->getType(), ~(ProvAlign - 1)));
-    return ProvenanceOffset(Rounded);
+    return IRB.CreateAnd(V, ConstantInt::get(V->getType(), ~(ProvAlign - 1)));
   }
 
   static ProvenanceOffset alignUp(IRBuilder<> &IRB, Value *V) {
@@ -204,8 +204,8 @@ struct ProvenanceDest {
   ProvenanceDest(Value *Shadow, Value *Origin, bool UpdateRefCt)
       : ShadowPtr(Shadow), OriginPtr(Origin), UpdateRefCt(UpdateRefCt) {}
   ProvenanceDest ptradd(IRBuilder<> &IRB, ProvenanceOffset Offset) {
-    return ProvenanceDest(::ptradd(IRB, ShadowPtr, Offset.Val),
-                          ::ptradd(IRB, OriginPtr, Offset.Val), UpdateRefCt);
+    return ProvenanceDest(::ptradd(IRB, ShadowPtr, Offset),
+                          ::ptradd(IRB, OriginPtr, Offset), UpdateRefCt);
   }
 };
 
@@ -444,25 +444,22 @@ private:
   Value *getAllocaSizeBytes(IRBuilder<> &IRB, AllocaInst *AI);
 
   /// Returns a list of the fields within a type that carry provenance
-  SmallVector<ProvenanceField> getProvenanceLayout(IRBuilder<> &IRB, Type *Ty,
-                                                   bool ClearGaps = false);
+  SmallVector<ProvenanceField> getProvenanceLayout(IRBuilder<> &IRB, Type *Ty);
 
 private:
   Value *getProvenanceLayout(IRBuilder<> &IRB,
                              SmallVector<ProvenanceField> &ProvDesc,
-                             Type *CurrentTy, Value *ByteOffset,
-                             bool ClearGaps = false);
+                             Type *CurrentTy, Value *ByteOffset);
 };
 } // end anonymous namespace
 
 // Provides a list of the locations of provenance values inside a type.
 SmallVector<ProvenanceField>
-BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB, Type *Ty,
-                                     bool ClearGaps) {
+BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB, Type *Ty) {
   SmallVector<ProvenanceField> Desc;
   if (Ty->isSized()) {
     Value *Zero = ConstantInt::get(IRB.getIntPtrTy(*DL), 0);
-    getProvenanceLayout(IRB, Desc, Ty, Zero, ClearGaps);
+    getProvenanceLayout(IRB, Desc, Ty, Zero);
   }
   return Desc;
 }
@@ -474,9 +471,10 @@ Value *BorrowSanitizer::getAllocaSizeBytes(IRBuilder<> &IRB, AllocaInst *AI) {
 
 // Populates a vector with the list of locations of provenance
 // values within a type.
-Value *BorrowSanitizer::getProvenanceLayout(
-    IRBuilder<> &IRB, SmallVector<ProvenanceField> &ProvDesc, Type *CurrentTy,
-    Value *ByteOffset, bool ClearGaps) {
+Value *
+BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB,
+                                     SmallVector<ProvenanceField> &ProvDesc,
+                                     Type *CurrentTy, Value *ByteOffset) {
   assert(CurrentTy->isSized() && "expected a sized type");
   Type *IntptrTy = IRB.getIntPtrTy(*DL);
 
@@ -491,23 +489,16 @@ Value *BorrowSanitizer::getProvenanceLayout(
     return ConstantInt::get(IntptrTy, 1);
   } break;
   case Type::IntegerTyID: {
-    if (!ClearGaps)
-      break;
     IntegerType *IT = cast<IntegerType>(CurrentTy);
     unsigned IntBitWidth = IT->getBitWidth();
     unsigned PtrBitWidth = DL->getPointerSizeInBits();
     // If the integer type is as large (or larger) than the
-    // word size, then we assume that it could be used in type-punning.
-    // We can assume that it's being used in place of the byte type,
-    // so we need to do *something* with provenance.
+    // word size, then we need to assume that it could be used in
+    // type-punning, so we treat it as having provenance. This is
+    // a temporary workaround until byte type support lands in
+    // Clang and Rust.
     if (IntBitWidth < PtrBitWidth)
       break;
-    // Normally, we could be able to take care of this by clearing
-    // provenance on stores, where type-punned pointers end up receiving
-    // omnivalid provenance. However, things work a bit differently when we
-    // pass provenance between functions. We store the provenance of each field
-    // in adjacent slots of the shadow stack. This avoids needing to allocate
-    // space for values that we know will never be treated as pointers.
     TypeSize AllocTySize = DL->getTypeAllocSize(CurrentTy);
     Value *AllocSize = IRB.CreateTypeSize(IntptrTy, AllocTySize);
     Align AllocAlign = DL->getABITypeAlign(CurrentTy);
@@ -525,7 +516,7 @@ Value *BorrowSanitizer::getProvenanceLayout(
           IRB.CreateTypeSize(IntptrTy, SL->getElementOffset(Idx));
       Value *CurrByteOffset = IRB.CreateAdd(ByteOffset, ElemOffset);
       auto *ProvOffset =
-          getProvenanceLayout(IRB, ProvDesc, ElemTy, CurrByteOffset, ClearGaps);
+          getProvenanceLayout(IRB, ProvDesc, ElemTy, CurrByteOffset);
       CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
     }
     return CurrProvOffset;
@@ -540,7 +531,7 @@ Value *BorrowSanitizer::getProvenanceLayout(
           IRB.CreateMul(ConstantInt::get(IntptrTy, Idx), ElemSize);
       CurrByteOffset = IRB.CreateAdd(ByteOffset, CurrByteOffset);
       auto *ProvOffset = getProvenanceLayout(
-          IRB, ProvDesc, AT->getElementType(), CurrByteOffset, ClearGaps);
+          IRB, ProvDesc, AT->getElementType(), CurrByteOffset);
       CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
     }
     return CurrProvOffset;
@@ -1768,11 +1759,8 @@ private:
       }
     }
 
-    IRB.CreateAlignedStore(Prov.Tag, Dest.ShadowPtr, kMinProvAlignment)
-        ->setAtomic(Ordering);
-
-    IRB.CreateAlignedStore(Prov.Info, Dest.OriginPtr, kMinProvAlignment)
-        ->setAtomic(Ordering);
+    IRB.CreateAlignedStore(Prov.Tag, Dest.ShadowPtr, kMinProvAlignment);
+    IRB.CreateAlignedStore(Prov.Info, Dest.OriginPtr, kMinProvAlignment);
   }
 
   // Populates the array of argument provenance pointers and initializes the
@@ -1827,16 +1815,15 @@ private:
         MaybeAlign ParamAlign = Arg.getParamAlign();
         Info.Alignment = ParamAlign.value_or(BS.DL->getABITypeAlign(Ty));
 
-        for (auto &Desc : BS.getProvenanceLayout(
-                 EntryIRB, Ty, /*ClearGaps=*/MaybeCalledFromUninst)) {
+        for (auto &Desc : BS.getProvenanceLayout(EntryIRB, Ty)) {
           Info.Fields.push_back({NumParamProv, Desc});
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
           NumParamProv = EntryIRB.CreateAdd(NumParamProv, NumProv);
         }
         ByValArgs.push_back(Info);
       } else {
-        SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceLayout(
-            EntryIRB, Arg.getType(), /*ClearGaps=*/MaybeCalledFromUninst);
+        SmallVector<ProvenanceField> ProvDesc =
+            BS.getProvenanceLayout(EntryIRB, Arg.getType());
         for (auto &Desc : ProvDesc) {
           ArgumentProvenance[&Arg].push_back({NumParamProv, Desc.Elems});
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
@@ -2057,8 +2044,8 @@ private:
       bool IsByVal = CB.paramHasAttr(i, Attribute::ByVal);
       Type *ArgTy = IsByVal ? CB.getParamByValType(i) : Arg->getType();
 
-      SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceLayout(
-          Before, ArgTy, /*ClearGaps=*/MaybeUninstrumented);
+      SmallVector<ProvenanceField> ProvDesc =
+          BS.getProvenanceLayout(Before, ArgTy);
 
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
 
@@ -2467,10 +2454,14 @@ private:
     // This is necessary for accurate reference counting and to
     // make sure that pointers that are cast from integers via load / store
     // type punning receive omnivalid provenance.
-    NextNodeIRBuilder AfterIRB(&SI);
-    ProvenanceDest ShadowPtr =
-        getShadowProvenancePtr(AfterIRB, Ptr, SI.getAlign());
-    copyProvenance(AfterIRB, ShadowPtr, Val, SI.getOrdering());
+    //
+    // Provenance is stored before the application's store, which is given an
+    // additional release ordering if it is atomic. Any thread that
+    // acquires the stored value will also observe its provenance.
+    IRBuilder<> IRB(&SI);
+    ProvenanceDest ShadowPtr = getShadowProvenancePtr(IRB, Ptr, SI.getAlign());
+    copyProvenance(IRB, ShadowPtr, Val, SI.getOrdering());
+    SI.setOrdering(addReleaseOrdering(SI.getOrdering()));
   }
 
   void copyProvenance(IRBuilder<> &IRB, ProvenanceDest Dest, Value *Val,
@@ -2577,15 +2568,35 @@ private:
 
     if (Dest.UpdateRefCt) {
       IRB.CreateCall(BS.BsanFuncShadowClearAligned,
-                     {Dest.ShadowPtr, Dest.OriginPtr, Size.Val});
+                     {Dest.ShadowPtr, Dest.OriginPtr, Size});
 
     } else {
       // We only need to clear tag values, since they gate the validity
       // of a provenance value.
       IRB.CreateMemSet(Dest.ShadowPtr,
-                       ConstantInt::getNullValue(IRB.getInt8Ty()), Size.Val,
+                       ConstantInt::getNullValue(IRB.getInt8Ty()), Size,
                        kMinProvAlignment);
     }
+  }
+
+  void handleCASOrRMW(Instruction &I) {
+    IRBuilder<> IRB(&I);
+    Value *Addr = I.getOperand(0);
+    Value *Val = I.getOperand(1);
+    ProvenanceDest ShadowPtr = getShadowProvenancePtr(IRB, Addr, Align(1));
+    TypeSize StoreSize = BS.DL->getTypeStoreSize(Val->getType());
+    Value *TotalSize = IRB.CreateTypeSize(BS.IntptrTy, StoreSize);
+    clearProvenance(IRB, ShadowPtr, TotalSize);
+  }
+
+  void visitAtomicRMWInst(AtomicRMWInst &I) {
+    handleCASOrRMW(I);
+    I.setOrdering(addReleaseOrdering(I.getOrdering()));
+  }
+
+  void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I) {
+    handleCASOrRMW(I);
+    I.setSuccessOrdering(addReleaseOrdering(I.getSuccessOrdering()));
   }
 
   void visitGetElementPtrInst(GetElementPtrInst &I) {
