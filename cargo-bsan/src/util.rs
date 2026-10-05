@@ -57,6 +57,12 @@ macro_rules! show_error {
 
 pub(crate) use show_error;
 
+pub fn cmd_output(cmd: &mut Command) -> Option<String> {
+    let output = cmd.output().ok()?;
+    let output = String::from_utf8(output.stdout).ok()?;
+    Some(String::from(output.trim()))
+}
+
 /// Debug-print a command that is going to be run.
 pub fn debug_cmd(prefix: &str, verbose: bool, cmd: &Command) {
     if verbose {
@@ -102,12 +108,15 @@ pub fn exec_with_pipe(mut cmd: Command) -> ! {
     std::process::exit(exit_status.code().unwrap_or(-1))
 }
 
+/// Returns `true` if we are running in CI, where we should not prompt the user.
+pub fn is_ci() -> bool {
+    // Most platforms set `CI`, but Azure has `TF_BUILD`
+    // see: https://learn.microsoft.com/en-us/azure/devops/pipelines/build/variables
+    env::var_os("CI").is_some() || env::var_os("TF_BUILD").is_some()
+}
+
 pub fn ask_to_run(mut cmd: Command, ask: bool, text: &str) {
-    // Disable interactive prompts in CI (GitHub Actions, Travis, AppVeyor, etc).
-    // Azure doesn't set `CI` though (nothing to see here, just Microsoft being Microsoft),
-    // so we also check their `TF_BUILD`.
-    let is_ci = env::var_os("CI").is_some() || env::var_os("TF_BUILD").is_some();
-    if ask && !is_ci {
+    if ask && !is_ci() {
         let mut buf = String::new();
         print!("I will run `{cmd:?}` to {text}. Proceed? [Y/n] ");
         io::stdout().flush().unwrap();
