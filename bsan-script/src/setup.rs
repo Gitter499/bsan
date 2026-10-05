@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::fs::{self};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -235,34 +235,42 @@ pub fn ensure_llvm_cmake(
     let is_installed = subdirs.iter().all(|subdir| path!(toolchain_dir / subdir).exists());
     let lockfile_matches = lockfile.exists() && fs::read_to_string(&lockfile)?.eq(sha);
 
-    if is_installed && lockfile_matches {
-        return Ok(());
+    if !(is_installed && lockfile_matches) {
+        prompt(skip_prompt, || {
+            let tmp_dir = sh.create_temp_dir()?;
+            let tmp_dir = tmp_dir.path();
+
+            let _tmp = sh.push_dir(tmp_dir);
+            cmdq!(sh, "git init -q .").run()?;
+            cmdq!(sh, "git remote add origin {LLVM_URL}").run()?;
+
+            cmdq!(sh, "git sparse-checkout set --no-cone --stdin").stdin(&sparse).run()?;
+
+            cmdq!(sh, "git fetch -q --depth=1 --filter=tree:0 origin {sha}").run()?;
+            cmdq!(sh, "git checkout -q FETCH_HEAD").run()?;
+
+            for subdir in &subdirs {
+                cmdq!(sh, "cp -fr {subdir} {toolchain_dir}").run()?;
+            }
+            fs::write(&lockfile, sha)?;
+            Ok(())
+        })?;
     }
-
-    prompt(skip_prompt, || {
-        let tmp_dir = sh.create_temp_dir()?;
-        let tmp_dir = tmp_dir.path();
-
-        let _tmp = sh.push_dir(tmp_dir);
-        cmdq!(sh, "git init -q .").run()?;
-        cmdq!(sh, "git remote add origin {LLVM_URL}").run()?;
-
-        cmdq!(sh, "git sparse-checkout set --no-cone --stdin").stdin(&sparse).run()?;
-
-        cmdq!(sh, "git fetch -q --depth=1 --filter=tree:0 origin {sha}").run()?;
-        cmdq!(sh, "git checkout -q FETCH_HEAD").run()?;
-
-        for subdir in &subdirs {
-            cmdq!(sh, "cp -fr {subdir} {toolchain_dir}").run()?;
-        }
-        fs::write(&lockfile, sha)?;
-        Ok(())
-    })?;
 
     let link_source = path!(root_dir / "bsan-rt" / "llvm-wrapper");
     let link_target = path!(compiler_rt_src / "lib" / "bsan");
-    if !link_target.exists() {
-        cmdq!(sh, "ln -fs {link_source} {link_target}").run()?;
+
+    // We need to recreate the symlink if it does not exist, or if it
+    // does exist, but points to a different source directory (which will
+    // happen if there are multiple clones of BorrowSanitizer that share
+    // the same toolchain version).
+    let needs_relink = fs::read_link(&link_target).map_or(true, |current| current != link_source);
+
+    // Without `-n`, `ln` would follow an existing link to another clone's
+    // directory and create the new link inside of it.
+    if needs_relink {
+        cmdq!(sh, "ln -fsn {link_source} {link_target}").run()?;
     }
+
     Ok(())
 }
