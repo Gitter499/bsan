@@ -4,7 +4,7 @@
 * A full **BorrowSanitizer-instrumented `bun-debug`** builds with Bun's own build system and runs JS. All Rust is
   instrumented, std included; JSC/C++ is not. This was not possible a month ago.
 * **3 confirmed Bun bugs (Tree Borrows UB).** All three are on the default startup path, and each also reproduces under BSan
-  in a small test on Bun's own code (see `../REPRO.md`):
+  in a small test on Bun's own code (see `../bugs/`):
   - F1: `bun_ast::new_store!`
   - F2: VirtualMachine/EventLoop self-pointer aliasing. Design-level; 3 sites observed.
   - F3: `bun_alloc::ast_alloc` bump allocator.
@@ -34,7 +34,7 @@
   `reset`, which runs in release builds too, not only the `debug_assertions` poison loop) reborrows through a
   Disabled tag.
 * BSan report (bun-debug -e 'console.log(1+1)'): repro/F1-new_store.bsan.txt
-* Repro: Bun's own `bun_parsers` test `json::tests::env_json` (../REPRO.md).
+* Repro: Bun's own `bun_parsers` test `json::tests::env_json` (../bugs/).
 * Production reachability: yes (every parse in release builds). Practical miscompilation risk is low today (Box
   `noalias` is only emitted for function parameters), but it is UB under Tree Borrows (and Stacked Borrows).
 * Fix (fix-01-new_store.patch): take the raw pointer after the move:
@@ -138,7 +138,7 @@
   a Bun TU, and the config pointer was written by the uninstrumented WebKit prebuilt. Report: "trying to access an
   allocation that has been freed" in `std::bit_cast`. Same mechanism as FP1/FP2. Report: repro/FP3-*.bsan.txt.
 * Not hit here, reported by the coordinator: `str::parse::<f64>()` from a heap buffer gives a protector report in
-  core::num::dec2flt (BSan FP: it is safe code, Bun's `json::tests::lenient_numbers`, ../REPRO.md).
+  core::num::dec2flt (BSan FP: it is safe code, Bun's `json::tests::lenient_numbers`, ../bugs/).
 
 ## Approach (chosen: build a BSan-instrumented `bun-debug` with Bun's own build system)
 
@@ -209,7 +209,7 @@ Everything is under /home/user/bsan-bun/jsc/.
    - `BSAN_INSTRUMENT_CXX=1`: the last binary was built with it; unset it to get back to the FP2 state.
    - `BSAN_RUST_DEBUGINFO=line-tables-only`
 5. Run `source env.sh; build/debug/bun-debug -e 'console.log(1+1)'`. For tests: `run-tests.sh list-batch1.txt <outdir>`.
-6. Repros: `../repro/run.sh`, see ../REPRO.md.
+6. Repros: `../repro/run.sh`, see ../bugs/.
 Helper scripts:
 - run-unit.py: re-runs one planned rustc unit, for the memory experiments.
 - gdb-trace.py: address breakpoints with short backtraces. This is how I found F3's reborrow site (gdb2.log).

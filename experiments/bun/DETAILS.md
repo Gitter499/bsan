@@ -12,7 +12,7 @@ aliasing/memory bugs that Miri cannot reach.
 
 ## Findings
 
-| # | Bun bug | Found by | Repro ([REPRO.md](REPRO.md)) | Fix |
+| # | Bun bug | Found by | Repro ([bugs/](bugs/)) | Fix |
 |---|---|---|---|---|
 | 1 | `bun_zlib`: zlib-ng's stored `z_stream` back-pointer vs. protected `&mut` (HTTP/WebSocket compression, `Bun.deflateSync`/`gzipSync`) | BSan, driver tests | `bun_zlib` test `bsan_repro`; passes with fix | `bun-patches/fix-zlib-deflate-backpointer.patch` |
 | 2 | `bun_ast` `new_store!`: `current` taken from a `Box` before it is moved (every parse) | BSan, Bun's `bun_parsers` tests + runtime run | Bun's test `json::tests::env_json`; passes with fix | `bun-patches/fix-ast-store-current.patch` |
@@ -21,7 +21,7 @@ aliasing/memory bugs that Miri cannot reach.
 
 Bugs 1–3 reproduce on Bun's own code: a Bun test, or a ~10-line test added by
 [`bun-patches/0004-bsan-repro-tests.patch`](bun-patches/0004-bsan-repro-tests.patch).
-[`repro/run.sh`](repro/run.sh) runs each before and after its fix. See [REPRO.md](REPRO.md).
+[`repro/run.sh`](repro/run.sh) runs each before and after its fix. See [bugs/](bugs/).
 
 Findings 3–4 come from the runtime run (a BSan-instrumented `bun-debug` built
 with Bun's own build system); details and reports are in

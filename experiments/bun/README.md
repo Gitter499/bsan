@@ -14,8 +14,10 @@ BorrowSanitizer (BSan) run on [Bun](https://github.com/oven-sh/bun) at `bc7a813b
 | 6 | `bun_exe_format` Mach-O writer (`bun build --compile` for macOS) | `update_load_command_offsets` writes load commands through a pointer derived from `&self.data` (a shared reference) | [patch](bun-patches/fix-macho-load-command-writes.patch) |
 
 All six are aliasing UB (Tree Borrows). None is known to crash today, but the
-compiler is allowed to miscompile them. Bugs 1–3 and 5 reproduce on Bun's own code,
-and their fixes make the repros pass: [REPRO.md](REPRO.md).
+compiler is allowed to miscompile them.
+
+**Each bug, in plain terms, with a 3-step repro anyone can run: [`bugs/`](bugs/).** Bugs 1–3, 5 and 6
+reproduce with one small test on unmodified Bun, and their fixes make that test pass.
 
 ## BSan issues found: 6
 

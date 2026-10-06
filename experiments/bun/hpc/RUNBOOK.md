@@ -71,7 +71,7 @@ Results:
 - `logs/drivers-summary.txt`
 
 Any line with `reports=N>0` or `error: Undefined Behavior` needs triage: see
-`../README.md` and `../REPRO.md`.
+`../README.md` and `../bugs/`.
 
 `job.slurm` sets `CARGO_BUILD_JOBS` to the CPU count. The default 128 GB is enough for
 `bun_css`/`bun_bundler`, which need over 10 GB per rustc process.
