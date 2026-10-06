@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# bsan-test <cargo test args>: build and run Bun tests under BorrowSanitizer.
+set -euo pipefail
+cd /workspaces/bun
+# APPLY=<patch file>: apply a fix to Bun first (e.g. to check that it clears the report).
+if [ -n "${APPLY:-}" ]; then git apply "$APPLY"; fi
+# BSan's nightly is newer than Bun's pinned one (allocator_api was split into allocator_ext);
+# inject the needed crate attributes as flags instead of editing Bun's sources.
+export EXTRA_RUSTFLAGS="-Zcrate-attr=feature(allocator_ext) -Zcrate-attr=allow(stable_features,unused_features) -Clink-arg=@/workspaces/bsan-bun/native/out/clibs.rsp"
+export RUST_MIN_STACK=${RUST_MIN_STACK:-67108864}
+# A single crate's test binary references symbols only Bun's higher-level crates define;
+# link-loop adds aborting stubs for them (a test that reaches one dies naming it).
+out=$(/workspaces/bsan-bun/scripts/link-loop.sh "$@") || { echo "$out"; exit 1; }
+exec /workspaces/bsan-bun/scripts/bsan-test.sh "$@"

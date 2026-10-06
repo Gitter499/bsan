@@ -1,0 +1,6 @@
+*
+!docker/
+!scripts/
+!native/
+native/out/
+native/src/
