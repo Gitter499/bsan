@@ -437,9 +437,6 @@ private:
   /// or otherwise has semantics that we can trust without boundary validation.
   bool shouldTrustFunction(const TargetLibraryInfo *TLI, const Value *V);
 
-  /// Indicates if this `alloca` needs to be instrumented.
-  bool shouldInstrumentAlloca(const AllocaInst &AI);
-
   /// Computes the size of an `alloca` in bytes.
   Value *getAllocaSizeBytes(IRBuilder<> &IRB, AllocaInst *AI);
 
@@ -559,17 +556,6 @@ bool BorrowSanitizer::shouldTrustFunction(const TargetLibraryInfo *TLI,
   }
 
   return false;
-}
-
-// We only instrument allocations that have a non-zero size.
-bool BorrowSanitizer::shouldInstrumentAlloca(const AllocaInst &AI) {
-  // Although Rust emits retags for ZSTs, tracking
-  // allocations leads to false positive errors—probably
-  // due to interactions with lowering.
-  Type *AllocType = AI.getAllocatedType();
-  std::optional<TypeSize> AllocSize = AI.getAllocationSize(*DL);
-  return (AllocType->isSized() && AllocSize.has_value() &&
-          !AllocSize.value().isZero());
 }
 
 bool BorrowSanitizer::instrumentModule(Module &M) {
@@ -1400,16 +1386,15 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // once the frame header has been initialized and validated.
   struct ByValArgInfo {
     Argument *Arg;
-    // The provenance of the implicit allocation backing the byval copy.
-    Provenance AllocProv;
+    // The provenance of the implicit allocation backing the byval copy, if
+    // the instrumentation plan requires us to track it.
+    std::optional<Provenance> AllocProv;
     Value *Size;
     Align Alignment;
     // The shadow-stack slot offset where the caller stored the provenance
     // of each field within the `byval` pointee type.
     SmallVector<std::pair<Value *, ProvenanceField>> Fields;
   };
-
-  SmallVector<Provenance, 2> ByValAllocs;
 
   // A vector containing yet-to-be resolved provenance values for PHI nodes.
   // The first element in the pair, the provenance "key", consists of a
@@ -1799,14 +1784,19 @@ private:
         TypeSize TS = BS.DL->getTypeAllocSize(Ty);
         Value *Size = EntryIRB.CreateTypeSize(BS.IntptrTy, TS);
 
-        Provenance Prov = createAllocaMetadata(EntryIRB);
-        initAllocaMetadata(EntryIRB, &Arg, Size, Prov);
-        ProvMap.setProvenance(&Arg, Prov);
-
         ByValArgInfo Info;
         Info.Arg = &Arg;
-        Info.AllocProv = Prov;
         Info.Size = Size;
+
+        // Field provenance is always copied below, so that pointers passed
+        // by value keep their provenance, but we only track the callee's
+        // private copy as an allocation when the plan requires it.
+        if (Plan.shouldInstrumentByVal(Arg)) {
+          Provenance Prov = createAllocaMetadata(EntryIRB);
+          initAllocaMetadata(EntryIRB, &Arg, Size, Prov);
+          ProvMap.setProvenance(&Arg, Prov);
+          Info.AllocProv = Prov;
+        }
 
         // If a `byval` parameter does not have an explicit alignment, then
         // we use the alignment of the type. As specified in the LLVM guide:
@@ -1871,9 +1861,11 @@ private:
       copyProvenance(EntryIRB, ShadowPtr, Fields, Info.Size,
                      AtomicOrdering::NotAtomic);
 
-      Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
-      auto SlotPtr = getMainProvenancePtr(EntryIRB, Slot);
-      storeProvenance(EntryIRB, SlotPtr, Info.AllocProv);
+      if (Info.AllocProv) {
+        Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
+        auto SlotPtr = getMainProvenancePtr(EntryIRB, Slot);
+        storeProvenance(EntryIRB, SlotPtr, *Info.AllocProv);
+      }
     }
 
     // We push additional slots into the frame header for
