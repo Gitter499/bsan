@@ -1,5 +1,5 @@
    Compiling bun_zlib v0.0.0 (/workspaces/bun/src/zlib)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.79s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.80s
      Running tests/bsan_repro.rs (target/bsan/x86_64-unknown-linux-gnu/debug/build/bun_zlib/8b745d169b1b9b34/out/bsan_repro-8b745d169b1b9b34)
 
 running 1 test

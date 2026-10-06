@@ -1,6 +1,6 @@
    Compiling memchr v2.8.0
-   Compiling crossbeam-utils v0.8.21
    Compiling serde_core v1.0.228
+   Compiling crossbeam-utils v0.8.21
    Compiling bstr v1.12.1
    Compiling bun_wyhash v0.0.0 (/workspaces/bun/src/wyhash)
    Compiling bun_highway v0.0.0 (/workspaces/bun/src/highway)
@@ -8,74 +8,74 @@
    Compiling bun_hash v0.0.0 (/workspaces/bun/src/hash)
    Compiling bun_core v0.0.0 (/workspaces/bun/src/bun_core)
    Compiling enum-map-derive v0.17.0
-   Compiling ident_case v1.0.1
    Compiling fnv v1.0.7
    Compiling zerocopy v0.8.48
+   Compiling ident_case v1.0.1
    Compiling darling_core v0.21.3
    Compiling enum-map v2.7.3
    Compiling bun_libuv_sys v0.0.0 (/workspaces/bun/src/libuv_sys)
    Compiling zerocopy-derive v0.8.48
-   Compiling serde v1.0.228
-   Compiling rustix v0.38.44
    Compiling zmij v1.0.21
+   Compiling serde v1.0.228
    Compiling autocfg v1.5.0
    Compiling bun_windows_sys v0.0.0 (/workspaces/bun/src/windows_sys)
+   Compiling rustix v0.38.44
    Compiling bun_errno v0.0.0 (/workspaces/bun/src/errno)
    Compiling num-traits v0.2.19
    Compiling crossbeam-epoch v0.9.18
    Compiling darling_macro v0.21.3
    Compiling serde_derive v1.0.228
-   Compiling linux-raw-sys v0.4.15
    Compiling cfg-if v1.0.4
+   Compiling bitflags v2.11.1
    Compiling rayon-core v1.13.0
    Compiling either v1.15.0
    Compiling serde_json v1.0.149
-   Compiling bitflags v2.11.1
+   Compiling linux-raw-sys v0.4.15
    Compiling half v2.7.1
    Compiling darling v0.21.3
    Compiling crossbeam-deque v0.8.6
    Compiling bun_paths v0.0.0 (/workspaces/bun/src/paths)
-   Compiling ciborium-io v0.2.2
-   Compiling anstyle v1.0.14
    Compiling clap_lex v1.1.0
    Compiling plotters-backend v0.3.7
    Compiling regex-syntax v0.8.10
-   Compiling plotters-svg v0.3.7
+   Compiling ciborium-io v0.2.2
+   Compiling anstyle v1.0.14
    Compiling clap_builder v4.6.0
-   Compiling regex-automata v0.4.14
    Compiling ciborium-ll v0.2.2
+   Compiling regex-automata v0.4.14
+   Compiling plotters-svg v0.3.7
    Compiling bun_sys v0.0.0 (/workspaces/bun/src/sys)
    Compiling enumset_derive v0.14.0
    Compiling itertools v0.10.5
    Compiling bun_ptr v0.0.0 (/workspaces/bun/src/ptr)
-   Compiling cast v0.3.0
    Compiling same-file v1.0.6
+   Compiling cast v0.3.0
+   Compiling criterion-plot v0.5.0
    Compiling bun_collections v0.0.0 (/workspaces/bun/src/collections)
    Compiling walkdir v2.5.0
-   Compiling criterion-plot v0.5.0
    Compiling enumset v1.1.10
    Compiling rayon v1.12.0
    Compiling tinytemplate v1.2.1
    Compiling plotters v0.3.7
    Compiling bun_perf v0.0.0 (/workspaces/bun/src/perf)
-   Compiling ciborium v0.2.2
    Compiling regex v1.12.3
+   Compiling ciborium v0.2.2
    Compiling clap v4.6.1
    Compiling is-terminal v0.4.17
-   Compiling once_cell v1.21.4
    Compiling anes v0.1.6
    Compiling oorandom v11.1.5
    Compiling bun_parsers v0.0.0 (/workspaces/bun/src/parsers)
+   Compiling once_cell v1.21.4
    Compiling criterion v0.5.1
    Compiling bun_ast v0.0.0 (/workspaces/bun/src/ast)
    Compiling quick-xml v0.38.4
-   Compiling xml-rs v0.8.29
    Compiling roxmltree v0.20.0
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 01s
+   Compiling xml-rs v0.8.29
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 10s
      Running unittests lib.rs (target/bsan/x86_64-unknown-linux-gnu/debug/build/bun_parsers/68afbbf6e2db65f2/out/bun_parsers-68afbbf6e2db65f2)
 
 running 1 test
-error: Undefined Behavior: reborrow through <171069>(unprotected) at alloc32235[0x0] is forbidden
+error: Undefined Behavior: reborrow through <170745>(unprotected) at alloc32219[0x0] is forbidden
     --> /workspaces/bun/src/ast/new_store.rs:236:69
      |
  236 | let mut it: Option<&mut Block> = store.head.as_deref_mut();
@@ -85,10 +85,10 @@ error: Undefined Behavior: reborrow through <171069>(unprotected) at alloc32235[
      |
 2299 | self
      | ^
-     = help: the accessed tag <171069>(unprotected) has state Disabled which forbids this reborrow (acting as a child read access)
-help: the accessed tag <171069>(unprotected) was created here, in the initial state Reserved
+     = help: the accessed tag <170745>(unprotected) has state Disabled which forbids this reborrow (acting as a child read access)
+help: the accessed tag <170745>(unprotected) was created here, in the initial state Reserved
     --> /workspaces/bun/src/ast/new_store.rs:0:21
-help: the accessed tag <171069>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x28]
+help: the accessed tag <170745>(unprotected) later transitioned to Disabled due to a foreign write access at offsets [0x0..0x28]
     --> /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:1966:41
      |
 1966 | intrinsics::write_via_move(dst, src)

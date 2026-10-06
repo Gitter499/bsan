@@ -1,6 +1,6 @@
 # BorrowSanitizer × Bun
 
-BorrowSanitizer (BSan) run on [Bun](https://github.com/oven-sh/bun) at `bc7a813b10`.
+BorrowSanitizer (BSan) run on [Bun](https://github.com/oven-sh/bun) at `bc7a813b10`. Repros re-checked on BSan from upstream main `0302f58`.
 
 ## Bun bugs found: 4
 
@@ -21,7 +21,7 @@ and their fixes make the repros pass: [REPRO.md](REPRO.md).
 2. **Missing line numbers:** some locations print as line 0.
 3. **Proc-macro doctests:** `cargo bsan test` fails on them.
 4. **Runtime bundling:** the BSan runtime is copied into every rlib.
-5. **False positive:** float parsing (`str::parse::<f64>`) in safe code.
+5. **False positive:** float parsing (`str::parse::<f64>`) in safe code. **Fixed on upstream main** (`0302f58`).
 6. **Aborts on first report:** it can't continue past one.
 
 ## What ran

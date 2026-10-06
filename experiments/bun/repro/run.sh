@@ -36,6 +36,7 @@ case_ 2-ast-store       report -                                       "${STORE[
 case_ 2-ast-store-fixed pass   "$P/fix-ast-store-current.patch"        "${STORE[@]}"
 case_ 3-ast-alloc       report -                                       "${ALLOC[@]}"
 case_ 3-ast-alloc-fixed pass   "$P/fix-ast-alloc.patch"                "${ALLOC[@]}"
-# BSan false positive in safe float parsing; needs bug 2's fix to get past it.
-case_ fp-float-parse    report "$P/fix-ast-store-current.patch"        "${FLOAT[@]}"
+# Was a BSan false positive in safe float parsing (BSan main b1c71a3); fixed on upstream
+# main 0302f58. Needs bug 2's fix to get past bug 2.
+case_ fp-float-parse    pass   "$P/fix-ast-store-current.patch"        "${FLOAT[@]}"
 exit $status

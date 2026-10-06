@@ -1,6 +1,6 @@
    Compiling bun_ast v0.0.0 (/workspaces/bun/src/ast)
    Compiling bun_parsers v0.0.0 (/workspaces/bun/src/parsers)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.55s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.47s
      Running unittests lib.rs (target/bsan/x86_64-unknown-linux-gnu/debug/build/bun_parsers/68afbbf6e2db65f2/out/bun_parsers-68afbbf6e2db65f2)
 
 running 1 test

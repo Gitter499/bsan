@@ -1,24 +1,24 @@
    Compiling bun_alloc v0.0.0 (/workspaces/bun/src/bun_alloc)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.77s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.89s
      Running tests/bsan_repro.rs (target/bsan/x86_64-unknown-linux-gnu/debug/build/bun_alloc/b668b201e02a90eb/out/bsan_repro-b668b201e02a90eb)
 
 running 1 test
-error: Undefined Behavior: write access through <156381>(StrongProtector) at alloc29679[0x0] is forbidden
- --> 75mas6pg5z3ngtbw7w72qr8bz:0:0
-  = help: the accessed tag <156381>(StrongProtector) has state Reserved (conflicted) which forbids this child write access
-help: the accessed tag <156381>(StrongProtector) was created here, in the initial state Reserved
- --> 75mas6pg5z3ngtbw7w72qr8bz:0:0
-help: the accessed tag <156381>(StrongProtector) later transitioned to Reserved (conflicted) due to a reborrow (acting as a foreign read access) at offsets [0x0..0x4010]
- --> cocj7mhycyl9v9rjbcraaie6c:0:0
+error: Undefined Behavior: write access through <156057>(StrongProtector) at alloc29652[0x0] is forbidden
+ --> f4fuuvql8llnldaoeb8ea3dr8:0:0
+  = help: the accessed tag <156057>(StrongProtector) has state Reserved (conflicted) which forbids this child write access
+help: the accessed tag <156057>(StrongProtector) was created here, in the initial state Reserved
+ --> f4fuuvql8llnldaoeb8ea3dr8:0:0
+help: the accessed tag <156057>(StrongProtector) later transitioned to Reserved (conflicted) due to a reborrow (acting as a foreign read access) at offsets [0x0..0x4010]
+ --> cxvqnfn76v66t3z67am12btuu:0:0
   = help: this transition corresponds to a temporary loss of write permissions until function exit
 
 stack backtrace:
 0: bsan_repro::visit
-      at 75mas6pg5z3ngtbw7w72qr8bz
+      at f4fuuvql8llnldaoeb8ea3dr8
 1: bsan_repro::ast_vec_write_after_alloc
-      at /workspaces/bun/src/bun_alloc/tests/bsan_repro.rs:19:9
+      at f4fuuvql8llnldaoeb8ea3dr8
 2: bsan_repro::ast_vec_write_after_alloc::{closure#0}
-      at amrhmvnwg3ionreiw0bomxnpk
+      at 889pqvwc5cfdp8vhiv3o6umia
 
 note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.
 error: test failed, to rerun pass `-p bun_alloc --test bsan_repro`

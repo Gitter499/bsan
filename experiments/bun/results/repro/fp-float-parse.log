@@ -8,42 +8,11 @@
    Compiling bun_perf v0.0.0 (/workspaces/bun/src/perf)
    Compiling bun_ast v0.0.0 (/workspaces/bun/src/ast)
    Compiling bun_parsers v0.0.0 (/workspaces/bun/src/parsers)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.97s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.36s
      Running unittests lib.rs (target/bsan/x86_64-unknown-linux-gnu/debug/build/bun_parsers/68afbbf6e2db65f2/out/bun_parsers-68afbbf6e2db65f2)
 
 running 1 test
-error: Undefined Behavior: deallocation through <184315>(unprotected) (root of the allocation) at alloc34924[0x0] is forbidden
-    --> /workspaces/bun/src/parsers/json_stage2.rs:1055:9
-     |
-1055 | };
-     | ^
-     = note: the above line calls library code, where the error was detected:
-    --> /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/alloc/unix.rs:65:14
-     |
-  65 | unsafe { libc::free(ptr as *mut libc::c_void) }
-     |          ^
-     = help: the accessed tag <184315>(unprotected) (root of the allocation) is foreign to the protected tag <184970>(StrongProtector) (i.e., it is not a child)
-     = help: this deallocation (acting as a foreign write access) would cause the protected tag <184970>(StrongProtector) (currently Frozen) to become Disabled
-     = help: protected tags must never be Disabled
-help: the accessed tag <184315>(unprotected) was created here
-    --> /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/alloc/unix.rs:31:18
-     |
-  31 | unsafe { libc::malloc(layout.size()) as *mut u8 }
-     |          ^
-help: the protected tag <184970>(StrongProtector) was created here, in the initial state Frozen
-    --> /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/num/imp/dec2flt/parse.rs:0:0
+test json::tests::lenient_numbers ... ok
 
-stack backtrace:
-0: std::sys::alloc::unix::dealloc
-      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/alloc/unix.rs:65:14
-1: __rustc::__rdl_dealloc
-      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/alloc.rs:480:6
-2: alloc::alloc::dealloc_nonnull
-      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/alloc.rs:197:14
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 37 filtered out; finished in 0.16s
 
-note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.
-error: test failed, to rerun pass `-p bun_parsers --lib`
-
-Caused by:
-  process didn't exit successfully: `/workspaces/bun/target/bsan/x86_64-unknown-linux-gnu/debug/build/bun_parsers/68afbbf6e2db65f2/out/bun_parsers-68afbbf6e2db65f2 'json::tests::lenient_numbers' --exact` (exit status: 1)
-note: test exited abnormally; to see the full output pass --no-capture to the harness.

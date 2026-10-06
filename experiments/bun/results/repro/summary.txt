@@ -1,7 +1,7 @@
-1-zlib                       want=report got=report ok  (logs/repro/1-zlib.log)
-1-zlib-fixed                 want=pass   got=pass   ok  (logs/repro/1-zlib-fixed.log)
-2-ast-store                  want=report got=report ok  (logs/repro/2-ast-store.log)
-2-ast-store-fixed            want=pass   got=pass   ok  (logs/repro/2-ast-store-fixed.log)
-3-ast-alloc                  want=report got=report ok  (logs/repro/3-ast-alloc.log)
-3-ast-alloc-fixed            want=pass   got=pass   ok  (logs/repro/3-ast-alloc-fixed.log)
-fp-float-parse               want=report got=report ok  (logs/repro/fp-float-parse.log)
+1-zlib                       want=report got=report ok
+1-zlib-fixed                 want=pass   got=pass   ok
+2-ast-store                  want=report got=report ok
+2-ast-store-fixed            want=pass   got=pass   ok
+3-ast-alloc                  want=report got=report ok
+3-ast-alloc-fixed            want=pass   got=pass   ok
+fp-float-parse               want=pass   got=pass   ok

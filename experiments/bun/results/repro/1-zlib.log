@@ -1,27 +1,71 @@
-   Compiling bun_alloc v0.0.0 (/workspaces/bun/src/bun_alloc)
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling memchr v2.8.0
+   Compiling syn v2.0.117
+   Compiling bstr v1.12.1
+   Compiling rustversion v1.0.22
+   Compiling libc v0.2.186
+   Compiling thiserror v2.0.18
+   Compiling bun_opaque v0.0.0 (/workspaces/bun/src/opaque)
+   Compiling konst_macro_rules v0.2.19
+   Compiling heck v0.5.0
+   Compiling unicode-xid v0.2.6
+   Compiling allocator-api2 v0.2.21
+   Compiling const_format_proc_macros v0.2.34
+   Compiling konst v0.2.20
+   Compiling strum_macros v0.26.4
+   Compiling thiserror-impl v2.0.18
+   Compiling bun_mimalloc_sys v0.0.0 (/workspaces/bun/src/mimalloc_sys)
+   Compiling bun_highway v0.0.0 (/workspaces/bun/src/highway)
+   Compiling bun_wyhash v0.0.0 (/workspaces/bun/src/wyhash)
    Compiling bun_core v0.0.0 (/workspaces/bun/src/bun_core)
+   Compiling bun_output_tags v0.0.0 (/workspaces/bun/src/bun_output_tags)
+   Compiling bun_alloc v0.0.0 (/workspaces/bun/src/bun_alloc)
+   Compiling bun_core_macros v0.0.0 (/workspaces/bun/src/bun_core_macros)
+   Compiling bun_hash v0.0.0 (/workspaces/bun/src/hash)
+   Compiling strum v0.26.3
+   Compiling bun_dispatch v0.0.0 (/workspaces/bun/src/dispatch)
+   Compiling const_format v0.2.36
+   Compiling itoa v1.0.18
+   Compiling bun_simdutf_sys v0.0.0 (/workspaces/bun/src/simdutf_sys)
+   Compiling bytemuck v1.25.0
+   Compiling paste v1.0.15
+   Compiling scopeguard v1.2.0
+   Compiling hashbrown v0.15.5
+   Compiling smallvec v1.15.1
+   Compiling rustc-hash v2.1.2
    Compiling bun_ptr v0.0.0 (/workspaces/bun/src/ptr)
    Compiling bun_collections v0.0.0 (/workspaces/bun/src/collections)
    Compiling bun_zlib_sys v0.0.0 (/workspaces/bun/src/zlib_sys)
    Compiling bun_zlib v0.0.0 (/workspaces/bun/src/zlib)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.71s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.79s
      Running tests/bsan_repro.rs (target/bsan/x86_64-unknown-linux-gnu/debug/build/bun_zlib/8b745d169b1b9b34/out/bsan_repro-8b745d169b1b9b34)
 
 running 1 test
-error: Undefined Behavior: read access through <156415>(unprotected) at alloc29642[0x8] is forbidden
+error: Undefined Behavior: read access through <156091>(unprotected) at alloc29626[0x8] is forbidden
     --> /workspaces/bsan-bun/native/src/zlib/deflate.c:1203:22
      |
 1203 | if (s->strm->avail_in == 0)
      |              ^
-     = help: the accessed tag <156415>(unprotected) is foreign to the protected tag <156460>(StrongProtector) (i.e., it is not a child)
-     = help: this foreign read access would cause the protected tag <156460>(StrongProtector) (currently Unique) to become Disabled
+     = help: the accessed tag <156091>(unprotected) is foreign to the protected tag <156136>(StrongProtector) (i.e., it is not a child)
+     = help: this foreign read access would cause the protected tag <156136>(StrongProtector) (currently Unique) to become Disabled
      = help: protected tags must never be Disabled
-help: the accessed tag <156415>(unprotected) was created here
- --> 0x562b8f387d01
-help: the protected tag <156460>(StrongProtector) was created here, in the initial state Reserved
-    --> deavyicf5x53yeapc9zdaop5v:0:0
-help: the protected tag <156460>(StrongProtector) later transitioned to Unique due to a child write access at offsets [0x8..0xc]
-    --> deavyicf5x53yeapc9zdaop5v:0:0
+help: the accessed tag <156091>(unprotected) was created here
+    --> /workspaces/bun/src/zlib/lib.rs:893:24
+     |
+ 893 | let mut this = Self {
+     |                ^
+help: the protected tag <156136>(StrongProtector) was created here, in the initial state Reserved
+    --> /workspaces/bun/src/zlib/lib.rs:1175:0
+     |
+1175 | fn step(
+     | ^
+help: the protected tag <156136>(StrongProtector) later transitioned to Unique due to a child write access at offsets [0x8..0xc]
+    --> /workspaces/bun/src/zlib/lib.rs:1190:5
+     |
+1190 | strm.avail_in = in_len as uInt;
+     | ^
      = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
 
 stack backtrace:
