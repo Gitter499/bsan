@@ -3,10 +3,11 @@
 #   docker run --rm -v $PWD/repro.rs:/workspaces/bun/src/<crate>/tests/repro.rs bun-bsan -p <pkg> --test repro
 ARG BASE=ghcr.io/borrowsanitizer/bsan@sha256:088df2384cf88949dfb630d45b62cc1b84f92c465b7408298124a2d132ddaa21
 FROM $BASE
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG BUN_COMMIT=bc7a813b10b6ef8accc00c931b9a501331ac8c5c
 ARG MACOS_TEMPLATE=https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-darwin-x64.zip
 
-RUN apt-get update && apt-get install -y --no-install-recommends unzip && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends unzip xz-utils nasm golang-go perl pkg-config libssl-dev libunwind-dev && rm -rf /var/lib/apt/lists/*
 
 # Bun's configure step looks for the LLVM tools by name; point them at BSan's toolchain.
 RUN T=/root/.rustup/toolchains/bsan/bin S=/root/.local/llvm23/bin && mkdir -p $S \
@@ -29,7 +30,7 @@ RUN RUSTUP_TOOLCHAIN=bsan bun run build --configure-only 2>&1 | tail -3 \
  && cargo +bsan fetch -q
 
 # BSan's instrumented standard library.
-RUN cargo bsan setup 2>&1 | tail -1
+RUN cargo +bsan bsan setup 2>&1 | tail -1
 
 # Bun's native dependencies at Bun's pinned commits, compiled with BSan instrumentation.
 COPY native /workspaces/bsan-bun/native
