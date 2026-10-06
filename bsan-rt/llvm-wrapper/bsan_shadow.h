@@ -4,16 +4,21 @@
 
 using namespace __sanitizer;
 
+struct Provenance;
+static constexpr uptr kMinProvAlignment = 8;
+
 // We slab-allocate blocks of 256 bytes within a dedicated 1 TB
 // memory region. This allows up to 2^32 allocation metadata
 // objects to be allocated at once.
 static constexpr uptr kBlockSize = 256;
+
 typedef u8 Block[kBlockSize];
 
 // Blocks are identified by 32-bit indices.
 typedef u32 BlockIndex;
 
-struct Provenance;
+typedef uptr BorTag;
+#define CONCRETE(tag) (tag > 2)
 
 struct MappingDesc {
   uptr start;
@@ -123,6 +128,21 @@ inline bool addr_is_type(uptr addr, int mapping_types) {
 #define MEM_IS_ORIGIN(mem) addr_is_type((uptr)(mem), MappingDesc::ORIGIN)
 
 namespace __bsan {
+
+// A range of shadow memory.
+struct ShadowRange {
+  ShadowRange(uptr begin, uptr end) {
+    begin &= ~(kMinProvAlignment - 1);
+    end &= ~(kMinProvAlignment - 1);
+    tags = (BorTag *)MEM_TO_SHADOW(begin);
+    blocks = (Block **)MEM_TO_ORIGIN(begin);
+    size = begin < end ? (end - begin) / kMinProvAlignment : 0;
+  }
+  BorTag *tags;
+  Block **blocks;
+  uptr size;
+};
+
 bool InitShadowWithReExec();
 void CopyShadow(void *dest, const void *src, uptr size);
 void JoinShadow(void *dest, const void *src_shadow, const void *src_origin,
@@ -133,6 +153,11 @@ void ClearShadow(void *dest, uptr size);
 void ClearShadowAligned(uptr shadow_start, uptr origin_start,
                         uptr size_aligned);
 void WriteShadow(void *dest, Provenance prov);
+// Zeroes the shadow of the application range [begin, end) without adjusting
+// reference counts. Whole pages are returned to the OS, so the cost is
+// proportional to the amount of shadow that was actually written to, and
+// not to the size of the range.
+void ReleaseShadow(uptr begin, uptr end);
 } // namespace __bsan
 
 #endif

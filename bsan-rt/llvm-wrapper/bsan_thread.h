@@ -72,22 +72,30 @@ public:
   // Returns the bottom of the "real" stack associated with this thread.
   uptr stackBottom() const { return stack_bottom_; }
 
-  // Returns the top of the "shadow" stack associated with this thread.
-  uptr shadowStackTop() const {
-    return (uptr)shadow_stack_bottom_ + shadow_stack_size_;
-  }
-
-  ArrayRef<Provenance> shadowStack() const {
-    Provenance *cursor = shadowStackCursor();
-    Provenance *top = (Provenance *)(shadowStackTop());
+  ArrayRef<Provenance> shadowRoots() const {
+    Provenance *cursor = shadowRootCursor();
+    Provenance *top =
+        (Provenance *)((uptr)shadow_stack_bottom_ + shadow_stack_size_);
     if (cursor == nullptr || cursor > top) {
       return {};
     }
     return ArrayRef<Provenance>(cursor, top - cursor);
   }
 
+  // Returns the shadow memory for the live region of this thread's "real"
+  // stack, from the given stack pointer up to the top of the stack.
+  // This can only be called when the world has been stopped.
+  ShadowRange shadowStack(uptr sp) const { return ShadowRange(sp, stack_top_); }
+
+  // Zeroes the shadow memory for the dead region of this thread's "real"
+  // stack, from the bottom of the stack up to the given stack pointer.
+  // This can only be called when the world has been stopped.
+  void releaseDeadShadowStack(uptr sp) const {
+    ReleaseShadow(stack_bottom_, sp & ~(kMinProvAlignment - 1));
+  }
+
   // Returns the current value of this thread's shadow stack pointer.
-  Provenance *shadowStackCursor() const {
+  Provenance *shadowRootCursor() const {
     return shadow_stack_ptr_ ? *shadow_stack_ptr_ : nullptr;
   }
 
@@ -139,7 +147,7 @@ private:
 
   BsanThreadContext *context_;
 
-  ConcreteProvenanceSet zct_;
+  ProvenanceSet zct_;
 
   thread_callback_t start_routine_;
   void *arg_;

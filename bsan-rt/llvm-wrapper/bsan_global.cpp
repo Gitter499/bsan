@@ -83,13 +83,12 @@ void GlobalContext::acquireProvenance(Provenance prov) {
   global_zct_.insert(prov);
 }
 
-void GlobalContext::acquireProvenance(ConcreteProvenanceSet &source) {
+void GlobalContext::acquireProvenance(ProvenanceSet &source) {
   Lock lock(&global_zct_lock_);
   global_zct_.takeFrom(source);
 }
 
-void GlobalContext::MergeZeroCounts(Snapshot *snap,
-                                    ConcreteProvenanceSet &zct) {
+void GlobalContext::MergeZeroCounts(Snapshot *snap, ProvenanceSet &zct) {
   zct.retainIf([&](BlockIndex idx, BorTag tag) -> bool {
     Provenance prov = {tag, BLOCK_PTR(idx)};
     if (snap->live.contains(prov)) {
@@ -105,18 +104,36 @@ void GlobalContext::RunGarbageCollector(Snapshot &snap,
   ForEachThread(
       threads,
       [](BsanThread *thread, Snapshot *snap) {
-        // Collect all of the provenance values that
-        // are reachable from each thread.
-        for (auto prov : thread->shadowStack()) {
+        // Each thread has three different areas that
+        // we need to scan to identify provenance values in
+        // shadow memory. First, we look at the "shadow roots",
+        // which store the provenance of values that may have been
+        // loaded into registers at the time the world is stopped.
+        for (auto prov : thread->shadowRoots()) {
           snap->live.insert(prov);
         }
-        uptr addr = thread->getStackPointer(memory_order_relaxed);
-        uptr cursor = addr & ~(kMinProvAlignment - 1);
-        for (; cursor < thread->stackTop(); cursor += kMinProvAlignment) {
-          Block *block = *(Block **)MEM_TO_ORIGIN(cursor);
-          if (block)
-            snap->live.insert({*(BorTag *)MEM_TO_SHADOW(cursor), block});
+
+        // Next, we scan the shadow of the thread's stack. There are
+        // two different ranges of the stack that we need to consider:
+        // The range [sp, top) includes all values within the shadow of
+        // live stack allocations. These must be read and then left untouched.
+        uptr sp = thread->getStackPointer(memory_order_relaxed);
+        ShadowRange live = thread->shadowStack(sp);
+        for (uptr i = 0; i < live.size; i++) {
+          if (live.blocks[i])
+            snap->live.insert({live.tags[i], live.blocks[i]});
         }
+
+        // The next range is [bottom, sp). These values are below the
+        // current stack pointer, and correspond to the shadow of stack
+        // allocations that were live at one point in time since the last GC
+        // pass. We need to clear these values so that they are not
+        // "resurrected" within the shadow of uninitialized allocations in
+        // future stack frames that get pushed. A thread only publishes its
+        // stack pointer when it reaches a safepoint, so we cannot know how far
+        // below the stack pointer it has been. Instead, we drop every page of
+        // shadow memory beneath it.
+        thread->releaseDeadShadowStack(sp);
       },
       &snap);
 
@@ -151,7 +168,7 @@ void GlobalContext::RunGarbageCollector(Snapshot &snap,
 }
 
 void GlobalContext::CollectGarbage(Snapshot *snap) {
-  ConcreteProvenanceSet still_pending;
+  ProvenanceSet still_pending;
   pending_.drain([&](BlockIndex idx, BorTagSet &tags) {
     Block *info = BLOCK_PTR(idx);
     tags.forEach([&](BorTag tag) {
