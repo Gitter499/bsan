@@ -26,7 +26,7 @@ fetch() {
   "$R" 'command -v bun >/dev/null || curl -fsSL https://bun.sh/install | bash >/dev/null'
   echo "== Bun checkout at $BUN_COMMIT + harness patches"
   "$R" 'cd /workspaces/bun && if [ ! -d .git ]; then git init -q . && git remote add origin https://github.com/oven-sh/bun.git && git fetch -q --depth=1 origin '"$BUN_COMMIT"' && git checkout -q FETCH_HEAD; fi
-        for p in 0001-toolchain-compat 0002-bsan-drivers 0003-test-shim-asan-headroom; do
+        for p in '"${BUN_PATCHES:-0001-toolchain-compat 0002-bsan-drivers 0003-test-shim-asan-headroom}"'; do
           f=/workspaces/bsan-bun/bun-patches/$p.patch
           git apply --check -R $f 2>/dev/null && continue
           git apply $f && echo "applied $p"
