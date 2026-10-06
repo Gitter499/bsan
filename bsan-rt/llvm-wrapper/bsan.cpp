@@ -1,4 +1,5 @@
 #include "bsan.h"
+#include "bsan_allocator.h"
 #include "bsan_flags.h"
 #include "bsan_global.h"
 #include "bsan_interface_internal.h"
@@ -13,7 +14,6 @@
 #include "sanitizer_common/sanitizer_stackdepot.h"
 #include "sanitizer_common/sanitizer_stacktrace.h"
 #include "sanitizer_common/sanitizer_stacktrace_printer.h"
-#include "sanitizer_common/sanitizer_stoptheworld.h"
 #include "sanitizer_common/sanitizer_symbolizer.h"
 
 using namespace __sanitizer;
@@ -40,6 +40,13 @@ USED static void (*const bsan_rust_runtime_anchor)(void) =
 // have been called from an uninstrumented context.
 SANITIZER_INTERFACE_ATTRIBUTE
 THREADLOCAL void *__bsan_marker = nullptr;
+
+// The trigger for the garbage collector. When this
+// flag is set, threads that hit a safepoint or
+// an instrumented boundary will poll, and wait
+// for the garbage collector to complete.
+SANITIZER_INTERFACE_ATTRIBUTE
+atomic_uint32_t __bsan_gc_trigger{0};
 
 // When we call one of Rust's allocator shims, we need to
 // mark the underlying function as being trusted by our runtime,
@@ -109,6 +116,14 @@ bool BsanInited() {
   return atomic_load(&bsan_inited, memory_order_acquire) == 1;
 }
 
+bool getGCTrigger(memory_order order) {
+  return atomic_load(&__bsan_gc_trigger, order) != 0;
+}
+
+void setGCTrigger(bool state, memory_order order) {
+  atomic_store(&__bsan_gc_trigger, state, order);
+}
+
 extern "C" SANITIZER_WEAK_ATTRIBUTE void
 __bsan_alloc_impl(void *base_addr, uptr size, BorTag bor_tag, Block *block,
                   Span pc);
@@ -128,7 +143,7 @@ Provenance BsanAllocateMeta(void *ptr, uptr size, uptr span) {
 void AcquireProvenance(Provenance prov) {
   BsanThread *thread = CurrentThread();
   if (LIKELY(thread != nullptr)) {
-    thread->zct.acquireProvenance(prov);
+    thread->acquireProvenance(prov);
   } else {
     global_ctx()->acquireProvenance(prov);
   }
@@ -308,7 +323,10 @@ static bool BsanInitInternal() {
   }
 
   InitializeRustAllocator();
-  __bsan_internal_init(&flags);
+  {
+    InterceptorBarrier barrier;
+    __bsan_internal_init(&flags);
+  }
 
   InitializeShadowedAllocator();
   InitializeInterceptors();
@@ -353,11 +371,11 @@ void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
   if (!t || !StackTrace::WillUseFastUnwind(request_fast)) {
     // Block reports from our interceptors during _Unwind_Backtrace.
     InterceptorBarrier barrier;
-    return Unwind(max_depth, pc, bp, context, t ? t->stack_top() : 0,
-                  t ? t->stack_bottom() : 0, false);
+    return Unwind(max_depth, pc, bp, context, t ? t->stackTop() : 0,
+                  t ? t->stackBottom() : 0, false);
   }
   if (StackTrace::WillUseFastUnwind(request_fast))
-    Unwind(max_depth, pc, bp, nullptr, t->stack_top(), t->stack_bottom(), true);
+    Unwind(max_depth, pc, bp, nullptr, t->stackTop(), t->stackBottom(), true);
   else
     Unwind(max_depth, pc, 0, context, 0, 0, false);
 }
@@ -370,14 +388,17 @@ void __bsan_init() { BsanInitFromRtl(); }
 
 /// When we call a possibly uninstrumented function, we store our frame
 /// pointer in a thread-local variable, marking the "boundary" between
-/// instrumented and uninstrumented code. Once we enter a function that may have
-/// been called from uninstrumented code, we check to see if our caller's frame
-/// pointer matches this boundary marker to determine whether we can trust our
-/// thread-local provenance arrays.
+/// instrumented and uninstrumented code. Once we enter a function that
+/// may have been called from uninstrumented code, we check to see if our
+/// caller's frame pointer matches this boundary marker to determine if
+/// we can trust our thread-local provenance arrays.
 SANITIZER_INTERFACE_ATTRIBUTE
 void *__bsan_mark(void *callee) {
   void *prev_marker = __bsan_marker;
   __bsan_marker = callee;
+  if (BsanThread *thread = CurrentThread()) {
+    thread->enterSafeMode();
+  }
   return prev_marker;
 }
 
@@ -423,6 +444,49 @@ void __bsan_validate_retval(void *prev_marker, Provenance *frame, uptr len) {
     }
   }
   __bsan_marker = prev_marker;
+}
+
+// Enters a "gc-unsafe" mode, meaning that the GC needs to wait
+// until this thread hits a safepoint before we can collect its garbage.
+// Returns a boolean indicating whether this thread was previously within
+// a safe mode. If so, we need to return it to a safe mode on exit. This is
+// not always the case. For example, an instrumented signal handler will be
+// called while a thread is still within an unsafe mode. We do not want to
+// return back into safe mode when the signal handler exits.
+SANITIZER_INTERFACE_ATTRIBUTE
+bool __bsan_enter_gc_unsafe() {
+  BsanThread *thread = CurrentThread();
+  if (UNLIKELY(!thread))
+    return false;
+  return thread->enterUnsafeMode();
+}
+
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_safepoint_poll() {
+  BsanThread *thread = CurrentThread();
+  if (UNLIKELY(!thread))
+    return;
+  // We use a relaxed load at safepoints. If a poll gets triggered,
+  // we need to check again using a stronger ordering, in case we
+  // saw a stale value.
+  if (!atomic_load(&__bsan_gc_trigger, memory_order_acquire))
+    return;
+  thread->poll();
+}
+
+// Exits a GC unsafe context, setting the thread to a "gc-safe" mode
+// if that's the mode that it was in before. This, paired with
+// `__bsan_enter_gc_unsafe`, marks an "unsafe" scope within which
+// the GC needs to wait until a thread reaches its safe point to
+// be able to stop the world.
+SANITIZER_INTERFACE_ATTRIBUTE
+void __bsan_exit_gc_unsafe(bool was_in_safe_mode_before) {
+  if (!was_in_safe_mode_before)
+    return;
+  BsanThread *thread = CurrentThread();
+  if (UNLIKELY(!thread))
+    return;
+  thread->enterSafeMode();
 }
 
 // Symbolize a single PC into file:line:column, writing the file path into
@@ -561,10 +625,25 @@ SANITIZER_WEAK_ATTRIBUTE
 bool __bsan_rc_inc_impl(BorTag Tag, Block *Info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_inc(BorTag Tag, Block *Info) {
-  if (__bsan_rc_inc_impl) {
+void __bsan_rc_inc(BorTag tag, Block *info, void *dest_shadow) {
+  if (!CONCRETE(tag))
+    return;
+  uptr dest = SHADOW_TO_MEM(dest_shadow);
+  if (!dest)
+    return;
+  BsanThread *t = CurrentThread();
+  bool is_thread = t && t->ownsAddress(dest);
+  if (is_thread) {
+    return;
+  }
+  bool is_heap = IsHeapAddr(dest);
+  if (is_heap) {
+    if (ShadowedMetadata *meta = GetAllocMetaData((void *)dest))
+      meta->setContainsProvenance(true);
+  }
+  if (LIKELY(__bsan_rc_inc_impl)) {
     InterceptorBarrier barrier;
-    __bsan_rc_inc_impl(Tag, Info);
+    __bsan_rc_inc_impl(tag, info);
   }
 }
 
@@ -572,8 +651,15 @@ SANITIZER_WEAK_ATTRIBUTE
 bool __bsan_rc_dec_impl(BorTag tag, Block *info);
 
 SANITIZER_INTERFACE_ATTRIBUTE
-void __bsan_rc_dec(BorTag tag, Block *info) {
-  if (__bsan_rc_dec_impl) {
+void __bsan_rc_dec(BorTag tag, Block *info, void *dest_shadow) {
+  if (!CONCRETE(tag))
+    return;
+  uptr dest = SHADOW_TO_MEM(dest_shadow);
+  if (!dest)
+    return;
+  if (!IsHeapAddr(dest))
+    return;
+  if (LIKELY(__bsan_rc_dec_impl)) {
     InterceptorBarrier barrier;
     if (__bsan_rc_dec_impl(tag, info)) {
       AcquireProvenance({tag, info});
@@ -594,7 +680,9 @@ void __bsan_shadow_clear_aligned(void *dest_shadow, void *dest_origin,
 
 SANITIZER_INTERFACE_ATTRIBUTE
 Block *__bsan_reserve_stack_slot() {
-  return BLOCK_PTR(CurrentThread()->AllocBlock());
+  Block *block = BLOCK_PTR(CurrentThread()->AllocBlock());
+  internal_memset(block, 0, sizeof(atomic_uint64_t));
+  return block;
 }
 
 SANITIZER_INTERFACE_ATTRIBUTE SANITIZER_WEAK_ATTRIBUTE bool
@@ -604,7 +692,7 @@ __bsan_dealloc(void *ptr, BorTag bor_tag, Block *alloc_info, Span pc,
 }
 
 SANITIZER_WEAK_ATTRIBUTE
-void __bsan_alloc_stack_impl(void *base_addr, uptr size, BorTag bor_tag,
+bool __bsan_alloc_stack_impl(void *base_addr, uptr size, BorTag bor_tag,
                              Block *alloc_info, Span pc);
 
 SANITIZER_INTERFACE_ATTRIBUTE
@@ -655,7 +743,7 @@ void __bsan_pop_frame(const Provenance *frame_start, uptr prot,
         __bsan_protector_end_impl(prov.tag, prov.block, span);
       } else {
         __bsan_dealloc_stack_impl(prov.tag, prov.block, span);
-        CurrentThread()->FreeBlock(BLOCK_IDX(prov.block));
+        AcquireProvenance(prov);
       }
     }
   }

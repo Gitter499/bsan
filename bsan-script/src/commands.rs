@@ -10,7 +10,7 @@ use xshell::cmd;
 
 use crate::env::{BsanEnv, Mode};
 use crate::stats::*;
-use crate::utils::install_git_hooks;
+use crate::utils::{cmdq, install_git_hooks};
 use crate::Command;
 
 impl Command {
@@ -26,11 +26,10 @@ impl Command {
         match self {
             Command::Setup => Self::setup(env),
             Command::Clean => Self::clean(env),
-            Command::Ci { args, allow_unsafe_deps } => Self::ci(env, &args, allow_unsafe_deps),
-            Command::Doc { components, args } => components.iter().try_for_each(|c| {
-                c.doc(env, &args)?;
-                Ok(())
-            }),
+            Command::CI { args, allow_unsafe_deps } => Self::ci(env, &args, allow_unsafe_deps),
+            Command::Doc { components, args } => {
+                components.iter().try_for_each(|c| c.doc(env, &args))
+            }
             Command::Bin { binary_name, args } => Self::bin(env, binary_name, &args),
             Command::Opt { args } => Self::opt(env, &args),
             Command::Fmt { check } => Self::fmt(env, check),
@@ -51,8 +50,8 @@ impl Command {
             Command::Install { components, args } => {
                 components.iter().try_for_each(|c| c.install(env, &args))
             }
-            Command::UI { bless, keep_sysroot, allow_unsafe_deps } => {
-                Self::ui(env, bless, keep_sysroot, allow_unsafe_deps)
+            Command::UI { bless, keep_sysroot, allow_unsafe_deps, libcxx } => {
+                Self::ui(env, bless, keep_sysroot, allow_unsafe_deps, libcxx)
             }
             Command::Miri { components, args } => components.iter().try_for_each(|c| {
                 c.miri(env, &args)?;
@@ -85,8 +84,9 @@ impl Command {
         bless: bool,
         keep_sysroot: bool,
         allow_unsafe_deps: bool,
+        libcxx: bool,
     ) -> Result<()> {
-        let config = TestConfig { keep_sysroot, allow_unsafe_deps, bless, fix: false };
+        let config = TestConfig { keep_sysroot, allow_unsafe_deps, libcxx, bless, fix: false };
 
         run_tests(env, config)?;
 
@@ -107,7 +107,7 @@ impl Command {
             Self::fmt(env, true)?;
             components.iter().try_for_each(|c| c.clippy(env, args))?;
             components.iter().try_for_each(|c| c.test(env, args))?;
-            Self::ui(env, false, false, allow_unsafe_deps)
+            Self::ui(env, false, false, allow_unsafe_deps, true)
         })
     }
 
@@ -126,7 +126,7 @@ impl Command {
         let pass = env.build_artifact(BsanPass, args)?;
         let pass = pass.to_str().unwrap();
         let opt = env.target_binary("opt");
-        cmd!(env.sh, "{opt} --load-pass-plugin={pass} -passes=bsan {args...}").quiet().run()?;
+        cmdq!(env.sh, "{opt} --load-pass-plugin={pass} -passes=bsan {args...}").run()?;
         Ok(())
     }
 
@@ -156,11 +156,10 @@ impl Command {
             let flags = String::from_utf8(flags.stdout)?;
             let flags = flags.split_whitespace().collect::<Vec<_>>();
 
-            cmd!(env.sh, "rustc {file}")
+            cmdq!(env.sh, "rustc {file}")
                 .args(flags)
                 .args(args)
                 .arg(format!("--sysroot={}", sysroot_dir.display()))
-                .quiet()
                 .run()?;
 
             drop(env_guards);
@@ -172,10 +171,12 @@ impl Command {
     fn stats(env: &mut BsanEnv) -> Result<()> {
         let root = &env.root_dir;
         let pass = count_rs(&path!(root / "tests" / "pass"))?
-            + count_rs(&path!(root / "tests" / "pass-dep"))?;
+            + count_rs(&path!(root / "tests" / "pass-dep"))?
+            + count_rs(&path!(root / "tests" / "cxx" / "pass"))?;
         let miri_pass = count_rs(&path!(root / "tests" / "miri-tests" / "pass"))?;
         let fail = count_rs(&path!(root / "tests" / "fail"))?
-            + count_rs(&path!(root / "tests" / "fail-dep"))?;
+            + count_rs(&path!(root / "tests" / "fail-dep"))?
+            + count_rs(&path!(root / "tests" / "cxx" / "fail"))?;
         let miri_fail = count_rs(&path!(root / "tests" / "miri-tests" / "fail"))?;
         let mirilli_fail = count_rs(&path!(root / "tests" / "fail-dep" / "mirilli"))?;
         let miri_should_pass = count_rs(&path!(root / "tests" / "miri-tests" / "should-pass"))?;
@@ -232,7 +233,13 @@ impl Command {
     }
 
     fn fix(env: &mut BsanEnv, keep_sysroot: bool) -> Result<()> {
-        let config = TestConfig { keep_sysroot, bless: false, fix: true, allow_unsafe_deps: false };
+        let config = TestConfig {
+            keep_sysroot,
+            bless: false,
+            fix: true,
+            allow_unsafe_deps: false,
+            libcxx: false,
+        };
         run_tests(env, config)?;
         Ok(())
     }
@@ -253,17 +260,20 @@ struct TestConfig {
     /// that we can recreate with BorrowSanitizer. This should only
     /// be used in CI, or in a secure environment.
     allow_unsafe_deps: bool,
+    /// Builds tests with C++ dependencies. This will also build an
+    /// instrumented copy of libc++.
+    libcxx: bool,
 }
 
 fn run_tests(env: &mut BsanEnv, config: TestConfig) -> Result<(), anyhow::Error> {
     let sysroot_dir = path!(&env.target_dir / "sysroot");
     if !config.keep_sysroot {
-        cmd!(env.sh, "rm -rf {sysroot_dir}").quiet().run()?;
+        cmdq!(env.sh, "rm -rf {sysroot_dir}").run()?;
         // The cached build of the test suite's dependencies goes stale for the
         // same reasons as the sysroot: Cargo does not know to rebuild it when
         // the instrumentation pass changes.
         let dep_cache = path!(&env.target_dir / "tmp" / "bsan_ui");
-        cmd!(env.sh, "rm -rf {dep_cache}").quiet().run()?;
+        cmdq!(env.sh, "rm -rf {dep_cache}").run()?;
     }
     env.sh.set_var("BSAN_SYSROOT", &sysroot_dir);
 
@@ -302,6 +312,14 @@ fn run_tests(env: &mut BsanEnv, config: TestConfig) -> Result<(), anyhow::Error>
         }
 
         cmd!(env.sh, "{cargo_bsan} bsan setup").run()?;
+        if config.libcxx {
+            if !path!(&sysroot_dir / "libcxx" / ".installed").exists() {
+                cmd!(env.sh, "{cargo_bsan} bsan setup --build-libcxx").run()?;
+            }
+            // This flag is read by the ui-test harness, and used to
+            // determine if C++ tests should be executed.
+            env_guards.push(env.sh.push_env("BSAN_CXX", "1"));
+        }
         let rustflags = cmd!(env.sh, "{cargo_bsan} bsan setup --print-rustflags").output()?;
         let rustflags = String::from_utf8(rustflags.stdout)?;
 
@@ -462,6 +480,9 @@ impl CompilerRt {
         cfg.define("LLVM_COMMON_CMAKE_UTILS", cmake_common);
         cfg.define("LLVM_CMAKE_DIR", llvm_cmake);
         cfg.define("BSAN_CLANG_FORMAT", env.sysroot_binary("clang-format"));
+        if env.mode() == Mode::Debug {
+            cfg.define("COMPILER_RT_DEBUG", "ON");
+        }
 
         cfg.build_target(&CompilerRt.artifact(env));
         Ok(cfg)
@@ -530,7 +551,7 @@ impl Buildable for BsanRt {
             Ok(env.assert_artifact(&self.artifact(env)))
         })?;
 
-        cmd!(env.sh, "{llvm_objcopy} -w -G __bsan_*").arg(&rust_runtime).quiet().run()?;
+        cmdq!(env.sh, "{llvm_objcopy} -w -G __bsan_*").arg(&rust_runtime).run()?;
 
         Ok(Some(rust_runtime))
     }

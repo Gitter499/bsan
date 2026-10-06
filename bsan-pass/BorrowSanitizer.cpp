@@ -17,12 +17,14 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/AtomicOrdering.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Transforms/Scalar/PlaceSafepoints.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/EscapeEnumerator.h"
 #include "llvm/Transforms/Utils/Instrumentation.h"
@@ -51,6 +53,16 @@ static const unsigned kVarArgTLSSizeBytes = 800;
 // The number of provenance values that can
 // be stored within a TLS array for fixed parameters.
 static const unsigned kParamTLSSizeProv = 100;
+
+// BorrowSanitizer's garbage collector requires a set of
+// "safepoints", where threads can be interrupted while the
+// runtime is in a consistent state. We reuse LLVM's existing
+// GC infrastructure to insert these, with the "statepoint-example"
+// safepoint mode. This inserts calls to "gc.safepoint_poll" at
+// function entry, exit, and in the backedges of loops. These
+// functions are replaced by our custom behavior.
+static const char *const kSafepointGCName = "statepoint-example";
+static const char *const kSafepointPollName = "gc.safepoint_poll";
 
 static cl::opt<bool> ClHandleAsmConservative(
     "bsan-asm-conservative",
@@ -158,11 +170,11 @@ struct ProvenanceOffset {
     Val = ConstantInt::get(Ty, Bytes);
   }
 
+  operator Value *() const { return Val; }
+
   static ProvenanceOffset alignDown(IRBuilder<> &IRB, Value *V) {
     const uint64_t ProvAlign = kMinProvAlignment.value();
-    Value *Rounded =
-        IRB.CreateAnd(V, ConstantInt::get(V->getType(), ~(ProvAlign - 1)));
-    return ProvenanceOffset(Rounded);
+    return IRB.CreateAnd(V, ConstantInt::get(V->getType(), ~(ProvAlign - 1)));
   }
 
   static ProvenanceOffset alignUp(IRBuilder<> &IRB, Value *V) {
@@ -192,8 +204,8 @@ struct ProvenanceDest {
   ProvenanceDest(Value *Shadow, Value *Origin, bool UpdateRefCt)
       : ShadowPtr(Shadow), OriginPtr(Origin), UpdateRefCt(UpdateRefCt) {}
   ProvenanceDest ptradd(IRBuilder<> &IRB, ProvenanceOffset Offset) {
-    return ProvenanceDest(::ptradd(IRB, ShadowPtr, Offset.Val),
-                          ::ptradd(IRB, OriginPtr, Offset.Val), UpdateRefCt);
+    return ProvenanceDest(::ptradd(IRB, ShadowPtr, Offset),
+                          ::ptradd(IRB, OriginPtr, Offset), UpdateRefCt);
   }
 };
 
@@ -276,6 +288,8 @@ public:
   bool instrumentModule(Module &M);
   bool instrumentFunction(Function &F, FunctionAnalysisManager &FAM,
                           const StackSafetyGlobalInfo &SSGI);
+  void enableSafepoints(Module &M);
+  void disableSafepoints(Module &M);
 
 private:
   friend struct VarArgHelperBase;
@@ -284,6 +298,8 @@ private:
   friend struct Provenance;
   friend struct ProvenanceMap;
   friend class BorrowSanitizerVisitor;
+
+  void placeSafepoints(Function &F, FunctionAnalysisManager &FAM);
 
   void initializeCallbacks(Module &M, const TargetLibraryInfo &TLI);
   struct GlobalDescription {
@@ -311,6 +327,9 @@ private:
   /// Thread-local array used to pass the provenance of parameters.
   Value *ParamTLS = nullptr;
 
+  /// Global flag that is set to activate safepoints.
+  Value *GCTrigger = nullptr;
+
   /// Thread-local variable containing the number of provenance values
   /// for variable arguments.
   Value *VAArgOverflowSizeTLS = nullptr;
@@ -332,6 +351,21 @@ private:
 
   /// Are the instrumentation callbacks set up?
   bool CallbacksInitialized = false;
+
+  /// The default GC safepoint function (`gc.safepoint_poll`),
+  /// which is replaced by our instrumentation.
+  Function *SafepointPollFn = nullptr;
+
+  // Runtime function to pause this thread until the GC is finished running.
+  FunctionCallee BsanFuncSafepointPoll;
+
+  /// Runtime function to mark the current thread as "gc-safe"
+  /// before returning into uninstrumented code.
+  FunctionCallee BsanFuncExitGCUnsafe;
+
+  /// Runtime function to mark the current thread as "gc-unsafe"
+  /// entering the current, instrumented function.
+  FunctionCallee BsanFuncEnterGCUnsafe;
 
   /// Runtime function for performing a retag
   FunctionCallee BsanFuncRetag;
@@ -361,8 +395,8 @@ private:
   /// the return value from a function call.
   FunctionCallee BsanFuncValidateRetval;
 
-  /// Runtime function for validating the section of the shadow stack containing
-  /// a function's arguments.
+  /// Runtime function for validating the parameter provenance array
+  /// on entry to a function that may be called from uninstrumented code.
   FunctionCallee BsanFuncValidateParams;
 
   /// Runtime replacement for `memset` that also clears shadow memory.
@@ -403,32 +437,26 @@ private:
   /// or otherwise has semantics that we can trust without boundary validation.
   bool shouldTrustFunction(const TargetLibraryInfo *TLI, const Value *V);
 
-  /// Indicates if this `alloca` needs to be instrumented.
-  bool shouldInstrumentAlloca(const AllocaInst &AI);
-
   /// Computes the size of an `alloca` in bytes.
   Value *getAllocaSizeBytes(IRBuilder<> &IRB, AllocaInst *AI);
 
   /// Returns a list of the fields within a type that carry provenance
-  SmallVector<ProvenanceField> getProvenanceLayout(IRBuilder<> &IRB, Type *Ty,
-                                                   bool ClearGaps = false);
+  SmallVector<ProvenanceField> getProvenanceLayout(IRBuilder<> &IRB, Type *Ty);
 
 private:
   Value *getProvenanceLayout(IRBuilder<> &IRB,
                              SmallVector<ProvenanceField> &ProvDesc,
-                             Type *CurrentTy, Value *ByteOffset,
-                             bool ClearGaps = false);
+                             Type *CurrentTy, Value *ByteOffset);
 };
 } // end anonymous namespace
 
 // Provides a list of the locations of provenance values inside a type.
 SmallVector<ProvenanceField>
-BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB, Type *Ty,
-                                     bool ClearGaps) {
+BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB, Type *Ty) {
   SmallVector<ProvenanceField> Desc;
   if (Ty->isSized()) {
     Value *Zero = ConstantInt::get(IRB.getIntPtrTy(*DL), 0);
-    getProvenanceLayout(IRB, Desc, Ty, Zero, ClearGaps);
+    getProvenanceLayout(IRB, Desc, Ty, Zero);
   }
   return Desc;
 }
@@ -440,9 +468,10 @@ Value *BorrowSanitizer::getAllocaSizeBytes(IRBuilder<> &IRB, AllocaInst *AI) {
 
 // Populates a vector with the list of locations of provenance
 // values within a type.
-Value *BorrowSanitizer::getProvenanceLayout(
-    IRBuilder<> &IRB, SmallVector<ProvenanceField> &ProvDesc, Type *CurrentTy,
-    Value *ByteOffset, bool ClearGaps) {
+Value *
+BorrowSanitizer::getProvenanceLayout(IRBuilder<> &IRB,
+                                     SmallVector<ProvenanceField> &ProvDesc,
+                                     Type *CurrentTy, Value *ByteOffset) {
   assert(CurrentTy->isSized() && "expected a sized type");
   Type *IntptrTy = IRB.getIntPtrTy(*DL);
 
@@ -457,23 +486,16 @@ Value *BorrowSanitizer::getProvenanceLayout(
     return ConstantInt::get(IntptrTy, 1);
   } break;
   case Type::IntegerTyID: {
-    if (!ClearGaps)
-      break;
     IntegerType *IT = cast<IntegerType>(CurrentTy);
     unsigned IntBitWidth = IT->getBitWidth();
     unsigned PtrBitWidth = DL->getPointerSizeInBits();
     // If the integer type is as large (or larger) than the
-    // word size, then we assume that it could be used in type-punning.
-    // We can assume that it's being used in place of the byte type,
-    // so we need to do *something* with provenance.
+    // word size, then we need to assume that it could be used in
+    // type-punning, so we treat it as having provenance. This is
+    // a temporary workaround until byte type support lands in
+    // Clang and Rust.
     if (IntBitWidth < PtrBitWidth)
       break;
-    // Normally, we could be able to take care of this by clearing
-    // provenance on stores, where type-punned pointers end up receiving
-    // omnivalid provenance. However, things work a bit differently when we
-    // pass provenance between functions. We store the provenance of each field
-    // in adjacent slots of the shadow stack. This avoids needing to allocate
-    // space for values that we know will never be treated as pointers.
     TypeSize AllocTySize = DL->getTypeAllocSize(CurrentTy);
     Value *AllocSize = IRB.CreateTypeSize(IntptrTy, AllocTySize);
     Align AllocAlign = DL->getABITypeAlign(CurrentTy);
@@ -491,7 +513,7 @@ Value *BorrowSanitizer::getProvenanceLayout(
           IRB.CreateTypeSize(IntptrTy, SL->getElementOffset(Idx));
       Value *CurrByteOffset = IRB.CreateAdd(ByteOffset, ElemOffset);
       auto *ProvOffset =
-          getProvenanceLayout(IRB, ProvDesc, ElemTy, CurrByteOffset, ClearGaps);
+          getProvenanceLayout(IRB, ProvDesc, ElemTy, CurrByteOffset);
       CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
     }
     return CurrProvOffset;
@@ -506,7 +528,7 @@ Value *BorrowSanitizer::getProvenanceLayout(
           IRB.CreateMul(ConstantInt::get(IntptrTy, Idx), ElemSize);
       CurrByteOffset = IRB.CreateAdd(ByteOffset, CurrByteOffset);
       auto *ProvOffset = getProvenanceLayout(
-          IRB, ProvDesc, AT->getElementType(), CurrByteOffset, ClearGaps);
+          IRB, ProvDesc, AT->getElementType(), CurrByteOffset);
       CurrProvOffset = IRB.CreateAdd(CurrProvOffset, ProvOffset);
     }
     return CurrProvOffset;
@@ -534,17 +556,6 @@ bool BorrowSanitizer::shouldTrustFunction(const TargetLibraryInfo *TLI,
   }
 
   return false;
-}
-
-// We only instrument allocations that have a non-zero size.
-bool BorrowSanitizer::shouldInstrumentAlloca(const AllocaInst &AI) {
-  // Although Rust emits retags for ZSTs, tracking
-  // allocations leads to false positive errors—probably
-  // due to interactions with lowering.
-  Type *AllocType = AI.getAllocatedType();
-  std::optional<TypeSize> AllocSize = AI.getAllocationSize(*DL);
-  return (AllocType->isSized() && AllocSize.has_value() &&
-          !AllocSize.value().isZero());
 }
 
 bool BorrowSanitizer::instrumentModule(Module &M) {
@@ -655,10 +666,10 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
       BSAN("validate_retval"), AL, IRB.getVoidTy(), PtrTy, PtrTy, IntptrTy);
 
   BsanFuncRcInc = M.getOrInsertFunction(BSAN("rc_inc"), AL, IRB.getVoidTy(),
-                                        IntptrTy, PtrTy);
+                                        IntptrTy, PtrTy, PtrTy);
 
   BsanFuncRcDec = M.getOrInsertFunction(BSAN("rc_dec"), AL, IRB.getVoidTy(),
-                                        IntptrTy, PtrTy);
+                                        IntptrTy, PtrTy, PtrTy);
 
   BsanFuncMemCpy = M.getOrInsertFunction(BSAN("memcpy"), AL, IRB.getVoidTy(),
                                          PtrTy, PtrTy, IntptrTy);
@@ -686,12 +697,25 @@ void BorrowSanitizer::initializeCallbacks(Module &M,
   BsanFuncExposeProv = M.getOrInsertFunction(BSAN("expose_prov"), AL,
                                              IRB.getVoidTy(), IntptrTy, PtrTy);
 
+  BsanFuncEnterGCUnsafe =
+      M.getOrInsertFunction(BSAN("enter_gc_unsafe"), AL, BoolTy);
+
+  BsanFuncExitGCUnsafe = M.getOrInsertFunction(BSAN("exit_gc_unsafe"), AL,
+                                               IRB.getVoidTy(), BoolTy);
+
+  BsanFuncSafepointPoll = M.getOrInsertFunction(
+      BSAN("safepoint_poll"),
+      FunctionType::get(IRB.getVoidTy(), /*isVarArg=*/false), AL);
+
   EHPersonality Pers = getDefaultEHPersonality(TargetTriple);
   DefaultPersonalityFn =
       M.getOrInsertFunction(getEHPersonalityName(Pers),
                             FunctionType::get(Type::getInt32Ty(*C), true));
 
   createUserspaceApi(M, TLI);
+  // This depends on `BsanFuncSafepointPoll` and `GCTrigger`,
+  // so it must come after they have been initialized.
+  enableSafepoints(M);
   CallbacksInitialized = true;
 }
 
@@ -709,6 +733,7 @@ void BorrowSanitizer::createUserspaceApi(Module &M,
 
   ProvStackTLS = getOrInsertTLSGlobal(M, BSAN("shadow_stack"), PtrTy);
   BorTagCounter = getOrInsertGlobal(M, BSAN("bor_tag_ctr"), IntptrTy);
+  GCTrigger = getOrInsertGlobal(M, BSAN("gc_trigger"), IRB.getInt32Ty());
 }
 
 namespace {
@@ -996,6 +1021,8 @@ PreservedAnalyses BorrowSanitizerPass::run(Module &M,
   for (Function &F : M) {
     Modified |= ModuleSanitizer.instrumentFunction(F, FAM, SSGI);
   }
+  ModuleSanitizer.disableSafepoints(M);
+
   if (!Modified)
     return PreservedAnalyses::all();
 
@@ -1359,16 +1386,15 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // once the frame header has been initialized and validated.
   struct ByValArgInfo {
     Argument *Arg;
-    // The provenance of the implicit allocation backing the byval copy.
-    Provenance AllocProv;
+    // The provenance of the implicit allocation backing the byval copy, if
+    // the instrumentation plan requires us to track it.
+    std::optional<Provenance> AllocProv;
     Value *Size;
     Align Alignment;
     // The shadow-stack slot offset where the caller stored the provenance
     // of each field within the `byval` pointee type.
     SmallVector<std::pair<Value *, ProvenanceField>> Fields;
   };
-
-  SmallVector<Provenance, 2> ByValAllocs;
 
   // A vector containing yet-to-be resolved provenance values for PHI nodes.
   // The first element in the pair, the provenance "key", consists of a
@@ -1385,6 +1411,25 @@ class BorrowSanitizerVisitor : public InstVisitor<BorrowSanitizerVisitor> {
   // removal is deferred until after checks have been inserted, because each one
   // is the insertion point for the checks guarding its own access.
   SmallVector<MemIntrinsic *, 4> ReplacedMemIntrinsics;
+  // When we enter a function that may be called while the thread is
+  // "gc-safe", we need to tell the GC that we are now "gc-unsafe". We do this
+  // by calling `__bsan_enter_gc_unsafe` in the prologue, which returns a flag
+  // indicating whether the thread was "gc-safe". We pass this flag to
+  // `__bsan_exit_gc_unsafe` on every exit from the function, to restore the
+  // previous state.
+  Value *GCEnterUninstFlag = nullptr;
+  // PHI nodes must be clustered at the beginning of a block. If a PHI Node
+  // can be re-entered, and it carries provenance, then we need to add a
+  // shadow stack slot for its contents so that they remain rooted during
+  // the backedge of a loop. We cache the location of the first non-PHI
+  // instruction at the beginning of the basic block. Each new shadow slot for
+  // a PHI node must be allocated starting at this location to ensure that
+  // earlier slots are allocated before later ones. If we dynamically computed
+  // the the first non-PHI insertion point every time, then it would be
+  // different for each call, and we would allocate the slots for the last PHI
+  // node before the slots for the first one, leading to an SSA dominance
+  // violation.
+  DenseMap<BasicBlock *, Instruction *> PHISlotInsertPtrs;
 
 public:
   BorrowSanitizerVisitor(Function &F, BorrowSanitizer &BS,
@@ -1534,7 +1579,10 @@ private:
     Value *OriginPtr = IRB.CreateIntToPtr(
         OriginLong, getPtrToShadowPtrType(IntptrTy, BS.PtrTy));
 
-    return ProvenanceDest(ShadowPtr, OriginPtr, true);
+    // We scan the stack, instead of using reference counting.
+    bool UpdateRefCt = !isa<AllocaInst>(getUnderlyingObject(Addr));
+
+    return ProvenanceDest(ShadowPtr, OriginPtr, UpdateRefCt);
   }
 
   Value *newBorrowTag(IRBuilder<> &IRB) {
@@ -1685,22 +1733,19 @@ private:
       // may see a zero reference count and deinitialize the provenance
       // that we are about to store.
       if (Prov != Provenance::omnivalid(BS)) {
-        IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info});
+        IRB.CreateCall(BS.BsanFuncRcInc, {Prov.Tag, Prov.Info, Dest.ShadowPtr});
       }
       // We only decrement on nonatomic stores. This leaks provenance
       // values that are exposed to atomic operations, which is necessary
       // to support atomics without locking.
       if (Ordering == AtomicOrdering::NotAtomic) {
         Provenance Old = loadProvenanceAlignedPairwise(IRB, Dest, Ordering);
-        IRB.CreateCall(BS.BsanFuncRcDec, {Old.Tag, Old.Info});
+        IRB.CreateCall(BS.BsanFuncRcDec, {Old.Tag, Old.Info, Dest.ShadowPtr});
       }
     }
 
-    IRB.CreateAlignedStore(Prov.Tag, Dest.ShadowPtr, kMinProvAlignment)
-        ->setAtomic(Ordering);
-
-    IRB.CreateAlignedStore(Prov.Info, Dest.OriginPtr, kMinProvAlignment)
-        ->setAtomic(Ordering);
+    IRB.CreateAlignedStore(Prov.Tag, Dest.ShadowPtr, kMinProvAlignment);
+    IRB.CreateAlignedStore(Prov.Info, Dest.OriginPtr, kMinProvAlignment);
   }
 
   // Populates the array of argument provenance pointers and initializes the
@@ -1714,6 +1759,12 @@ private:
         TopIRB.CreateIntrinsic(Intrinsic::donothing, {}));
     IRBuilder<> EntryIRB(FnPrologueEnd);
 
+    bool MaybeCalledFromUninst = needsBoundaryValidation(&F);
+
+    if (MaybeCalledFromUninst) {
+      GCEnterUninstFlag = EntryIRB.CreateCall(BS.BsanFuncEnterGCUnsafe, {});
+    }
+
     // We need to compute the total number of provenance values that
     // we receive from the caller before we can load them, which is
     // necessary for boundary validation. We can only load a provenance
@@ -1721,7 +1772,6 @@ private:
     // if we had an uninstrumented caller.
     Value *NumParamProv = ConstantInt::get(BS.IntptrTy, 0);
 
-    bool Validation = needsBoundaryValidation(&F);
     // Iterate over each argument to compute how many provenance slots
     // we need.
     SmallVector<ByValArgInfo> ByValArgs;
@@ -1734,14 +1784,19 @@ private:
         TypeSize TS = BS.DL->getTypeAllocSize(Ty);
         Value *Size = EntryIRB.CreateTypeSize(BS.IntptrTy, TS);
 
-        Provenance Prov = createAllocaMetadata(EntryIRB);
-        initAllocaMetadata(EntryIRB, &Arg, Size, Prov);
-        ProvMap.setProvenance(&Arg, Prov);
-
         ByValArgInfo Info;
         Info.Arg = &Arg;
-        Info.AllocProv = Prov;
         Info.Size = Size;
+
+        // Field provenance is always copied below, so that pointers passed
+        // by value keep their provenance, but we only track the callee's
+        // private copy as an allocation when the plan requires it.
+        if (Plan.shouldInstrumentByVal(Arg)) {
+          Provenance Prov = createAllocaMetadata(EntryIRB);
+          initAllocaMetadata(EntryIRB, &Arg, Size, Prov);
+          ProvMap.setProvenance(&Arg, Prov);
+          Info.AllocProv = Prov;
+        }
 
         // If a `byval` parameter does not have an explicit alignment, then
         // we use the alignment of the type. As specified in the LLVM guide:
@@ -1750,16 +1805,15 @@ private:
         MaybeAlign ParamAlign = Arg.getParamAlign();
         Info.Alignment = ParamAlign.value_or(BS.DL->getABITypeAlign(Ty));
 
-        for (auto &Desc :
-             BS.getProvenanceLayout(EntryIRB, Ty, /*ClearGaps=*/Validation)) {
+        for (auto &Desc : BS.getProvenanceLayout(EntryIRB, Ty)) {
           Info.Fields.push_back({NumParamProv, Desc});
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
           NumParamProv = EntryIRB.CreateAdd(NumParamProv, NumProv);
         }
         ByValArgs.push_back(Info);
       } else {
-        SmallVector<ProvenanceField> ProvDesc = BS.getProvenanceLayout(
-            EntryIRB, Arg.getType(), /*ClearGaps=*/Validation);
+        SmallVector<ProvenanceField> ProvDesc =
+            BS.getProvenanceLayout(EntryIRB, Arg.getType());
         for (auto &Desc : ProvDesc) {
           ArgumentProvenance[&Arg].push_back({NumParamProv, Desc.Elems});
           Value *NumProv = EntryIRB.CreateElementCount(BS.IntptrTy, Desc.Elems);
@@ -1778,7 +1832,7 @@ private:
     // our boundary marker matches the current function's address. If not,
     // we zero-out all of the parameter shadow stack slots, giving them
     // omnivalid provenance.
-    if (needsBoundaryValidation(&F)) {
+    if (MaybeCalledFromUninst) {
       if (!BS.shouldTrustFunction(TLI, &F)) {
         uint64_t VarArgBytes = 0;
         if (F.isVarArg()) {
@@ -1807,9 +1861,11 @@ private:
       copyProvenance(EntryIRB, ShadowPtr, Fields, Info.Size,
                      AtomicOrdering::NotAtomic);
 
-      Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
-      auto SlotPtr = getMainProvenancePtr(EntryIRB, Slot);
-      storeProvenance(EntryIRB, SlotPtr, Info.AllocProv);
+      if (Info.AllocProv) {
+        Value *Slot = ShadowStack.getStackAllocSlot(EntryIRB);
+        auto SlotPtr = getMainProvenancePtr(EntryIRB, Slot);
+        storeProvenance(EntryIRB, SlotPtr, *Info.AllocProv);
+      }
     }
 
     // We push additional slots into the frame header for
@@ -1969,7 +2025,7 @@ private:
     // First, we calculate where each fixed parameter's provenance is stored.
     Value *NumParamProv = ConstantInt::get(BS.IntptrTy, 0);
 
-    bool Clear = needsBoundaryValidation(Callee);
+    bool MaybeUninstrumented = needsBoundaryValidation(Callee);
     SmallVector<std::pair<Value *, Provenance>> ParamOffsets;
     for (const auto &[i, Arg] : llvm::enumerate(CB.args())) {
       // Variadics have special handling.
@@ -1981,7 +2037,7 @@ private:
       Type *ArgTy = IsByVal ? CB.getParamByValType(i) : Arg->getType();
 
       SmallVector<ProvenanceField> ProvDesc =
-          BS.getProvenanceLayout(Before, ArgTy, /*ClearGaps=*/Clear);
+          BS.getProvenanceLayout(Before, ArgTy);
 
       for (const auto &[Idx, Desc] : llvm::enumerate(ProvDesc)) {
 
@@ -2016,6 +2072,9 @@ private:
       // the semantics of a tail call are equivalent
       // to a return and then another call.
       popFrame(Before, CB, nullptr);
+      if (GCEnterUninstFlag && needsBoundaryValidation(Callee)) {
+        Before.CreateCall(BS.BsanFuncExitGCUnsafe, {GCEnterUninstFlag});
+      }
     }
 
     // If we have parameter provenance, then store it to the TLS array.
@@ -2088,10 +2147,15 @@ private:
       }
     }
 
-    // If we are returning from a possibly-uninstrumented function, then we need
-    // need to validate the space on the shadow stack where the return value's
-    // provenance is stored.
-    if (needsBoundaryValidation(Callee)) {
+    // If we are returning from a possibly-uninstrumented function,
+    // then we need need to validate the space on the shadow stack
+    // where the return value's provenance is stored.
+    if (MaybeUninstrumented) {
+      // If we are calling a maybe-uninstrumented function,
+      // then we also need to ensure that we have entered
+      // "gc-safe" mode before we proceed.
+      After.CreateCall(BS.BsanFuncEnterGCUnsafe, {});
+
       Value *Marker;
       Value *NullPtr = ConstantPointerNull::get(BS.PtrTy);
       // If this is a function that we can trust (e.g. an allocator)
@@ -2150,6 +2214,8 @@ private:
         Before.CreateStore(Marker, MarkerAlloca);
         BasicBlock *UnwindDest = II->getUnwindDest();
         IRBuilder<> UnwindIRB(UnwindDest, UnwindDest->getFirstInsertionPt());
+
+        UnwindIRB.CreateCall(BS.BsanFuncEnterGCUnsafe, {});
         Value *ToRestore = UnwindIRB.CreateLoad(BS.PtrTy, MarkerAlloca);
         UnwindIRB.CreateStore(ToRestore, BS.MarkerTLS);
       }
@@ -2223,10 +2289,35 @@ private:
     unsigned NumIncoming = PN.getNumIncomingValues();
     SmallVector<ProvenanceField> Components =
         BS.getProvenanceLayout(IRB, PN.getType());
+
+    // PHI nodes need to be clustered at the beginning of
+    // a basic block.
+    BasicBlock *Parent = PN.getParent();
+
+    // Cache the insertion point, so that we always allocate new
+    // slots at the same location. This ensures that the slots for
+    // each PHI node are allocated in the same relative order as the PHI nodes.
+    // If we called `getFirstInsertionPt()` every time, then the insertion
+    // point would always be different for each successive slot, and we would
+    // end up allocating slots in reverse order. Each stack slot allocation
+    // increments the value of the counter for the previous allocation, so
+    // allocating in reverse order would violate SSA dominance, leading to a
+    // compilation error.
+    auto [It, _] =
+        PHISlotInsertPtrs.try_emplace(Parent, &*Parent->getFirstInsertionPt());
+    IRBuilder<> AfterPHI(It->second);
+
     for (auto [Idx, Comp] : llvm::enumerate(Components)) {
       Provenance Prov =
           createProvenancePHI(IRB, Comp, predecessors(PN.getParent()));
       ProvMap.setProvenance({&PN, Idx}, Prov);
+
+      // TODO: does every PHI node need to be
+      // rooted in this way?
+      Value *Slot = allocStackSlot(AfterPHI, false);
+      ProvenanceDest SlotPtr = getMainProvenancePtr(AfterPHI, Slot);
+      storeProvenance(AfterPHI, SlotPtr, Prov);
+
       ProvPHINodes.push_back({{&PN, Idx}, Prov});
     }
   }
@@ -2355,10 +2446,14 @@ private:
     // This is necessary for accurate reference counting and to
     // make sure that pointers that are cast from integers via load / store
     // type punning receive omnivalid provenance.
-    NextNodeIRBuilder AfterIRB(&SI);
-    ProvenanceDest ShadowPtr =
-        getShadowProvenancePtr(AfterIRB, Ptr, SI.getAlign());
-    copyProvenance(AfterIRB, ShadowPtr, Val, SI.getOrdering());
+    //
+    // Provenance is stored before the application's store, which is given an
+    // additional release ordering if it is atomic. Any thread that
+    // acquires the stored value will also observe its provenance.
+    IRBuilder<> IRB(&SI);
+    ProvenanceDest ShadowPtr = getShadowProvenancePtr(IRB, Ptr, SI.getAlign());
+    copyProvenance(IRB, ShadowPtr, Val, SI.getOrdering());
+    SI.setOrdering(addReleaseOrdering(SI.getOrdering()));
   }
 
   void copyProvenance(IRBuilder<> &IRB, ProvenanceDest Dest, Value *Val,
@@ -2465,15 +2560,35 @@ private:
 
     if (Dest.UpdateRefCt) {
       IRB.CreateCall(BS.BsanFuncShadowClearAligned,
-                     {Dest.ShadowPtr, Dest.OriginPtr, Size.Val});
+                     {Dest.ShadowPtr, Dest.OriginPtr, Size});
 
     } else {
       // We only need to clear tag values, since they gate the validity
       // of a provenance value.
       IRB.CreateMemSet(Dest.ShadowPtr,
-                       ConstantInt::getNullValue(IRB.getInt8Ty()), Size.Val,
+                       ConstantInt::getNullValue(IRB.getInt8Ty()), Size,
                        kMinProvAlignment);
     }
+  }
+
+  void handleCASOrRMW(Instruction &I) {
+    IRBuilder<> IRB(&I);
+    Value *Addr = I.getOperand(0);
+    Value *Val = I.getOperand(1);
+    ProvenanceDest ShadowPtr = getShadowProvenancePtr(IRB, Addr, Align(1));
+    TypeSize StoreSize = BS.DL->getTypeStoreSize(Val->getType());
+    Value *TotalSize = IRB.CreateTypeSize(BS.IntptrTy, StoreSize);
+    clearProvenance(IRB, ShadowPtr, TotalSize);
+  }
+
+  void visitAtomicRMWInst(AtomicRMWInst &I) {
+    handleCASOrRMW(I);
+    I.setOrdering(addReleaseOrdering(I.getOrdering()));
+  }
+
+  void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I) {
+    handleCASOrRMW(I);
+    I.setSuccessOrdering(addReleaseOrdering(I.getSuccessOrdering()));
   }
 
   void visitGetElementPtrInst(GetElementPtrInst &I) {
@@ -2660,11 +2775,17 @@ private:
         return;
     IRBuilder<> IRB(&I);
     popFrame(IRB, I, I.getReturnValue());
+    if (GCEnterUninstFlag) {
+      IRB.CreateCall(BS.BsanFuncExitGCUnsafe, {GCEnterUninstFlag});
+    }
   }
 
   void visitResumeInst(ResumeInst &I) {
     IRBuilder<> IRB(&I);
     popFrame(IRB, I, I.getValue());
+    if (GCEnterUninstFlag) {
+      IRB.CreateCall(BS.BsanFuncExitGCUnsafe, {GCEnterUninstFlag});
+    }
   }
 };
 
@@ -3261,6 +3382,10 @@ static VarArgHelper *createVarArgHelper(Function &Func, BorrowSanitizer &BS,
 bool BorrowSanitizer::instrumentFunction(Function &F,
                                          FunctionAnalysisManager &FAM,
                                          const StackSafetyGlobalInfo &SSGI) {
+  if (&F == SafepointPollFn) {
+    return false;
+  }
+
   if (F.empty()) {
     return false;
   }
@@ -3286,9 +3411,13 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
   }
 
   const TargetLibraryInfo &TLI = FAM.getResult<TargetLibraryAnalysis>(F);
+  initializeCallbacks(*F.getParent(), TLI);
+
+  // Do this early, to avoid invalidating analysis results.
+  placeSafepoints(F, FAM);
+
   DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
 
-  initializeCallbacks(*F.getParent(), TLI);
   BorrowSanitizerVisitor Visitor(F, *this, TLI, DT, SSGI);
 
   AttributeMask B;
@@ -3299,4 +3428,65 @@ bool BorrowSanitizer::instrumentFunction(Function &F,
 
   F.addFnAttr(Attribute::DisableSanitizerInstrumentation);
   return true;
+}
+
+void BorrowSanitizer::enableSafepoints(Module &M) {
+  assert(BsanFuncSafepointPoll && GCTrigger);
+  AttributeList AL;
+  AL = AL.addFnAttribute(*C, Attribute::NoUnwind);
+  SafepointPollFn =
+      Function::Create(FunctionType::get(Type::getVoidTy(*C), false),
+                       GlobalValue::InternalLinkage, kSafepointPollName, M);
+  SafepointPollFn->addFnAttr(Attribute::NoUnwind);
+
+  BasicBlock *Entry = BasicBlock::Create(*C, "entry", SafepointPollFn);
+  BasicBlock *Slow = BasicBlock::Create(*C, "slow", SafepointPollFn);
+  BasicBlock *Exit = BasicBlock::Create(*C, "exit", SafepointPollFn);
+  IRBuilder<> IRB(Entry);
+  // Load the global "gc trigger" flag. If true, then another thread has
+  // requested for the GC to run, so we need to halt until it completes.
+
+  // We use a monotonic load. We need there to be some global consistent
+  // order of operations, but we do not need anything stronger. This is
+  // not used for synchronizing the state of each thread, so it's fine if
+  // we see a stale value. We'll reach it on the next safepoint.
+  LoadInst *Pending =
+      IRB.CreateAlignedLoad(IRB.getInt32Ty(), GCTrigger, Align(4));
+  Pending->setAtomic(AtomicOrdering::Monotonic);
+
+  // Check if the value is equal to one, which indicates that we
+  // should try to poll
+  Value *IsPending = IRB.CreateICmpNE(Pending, IRB.getInt32(0));
+  // The true path, where the GC is enabled, is unlikely.
+  auto *Unlikely = MDBuilder(*C).createUnlikelyBranchWeights();
+  IRB.CreateCondBr(IsPending, Slow, Exit, Unlikely);
+
+  IRB.SetInsertPoint(Slow);
+  CallInst *SlowCall = IRB.CreateCall(BsanFuncSafepointPoll, {});
+
+  // The poll is inlined into instrumented functions, so we need to
+  // prevent the visitor from instrumenting it.
+  MDNode *NoSanitize = MDNode::get(*C, {});
+  Pending->setMetadata(LLVMContext::MD_nosanitize, NoSanitize);
+  SlowCall->setMetadata(LLVMContext::MD_nosanitize, NoSanitize);
+  IRB.CreateBr(Exit);
+  IRB.SetInsertPoint(Exit);
+  IRB.CreateRetVoid();
+}
+
+void BorrowSanitizer::disableSafepoints(Module &M) {
+  if (SafepointPollFn) {
+    SafepointPollFn->eraseFromParent();
+    SafepointPollFn = nullptr;
+  }
+}
+
+void BorrowSanitizer::placeSafepoints(Function &F,
+                                      FunctionAnalysisManager &FAM) {
+  assert(SafepointPollFn && "`enableSafepoints` has not been called");
+  assert(!F.hasGC() && "function already has a GC strategy");
+  F.setGC(kSafepointGCName);
+  PreservedAnalyses PA = PlaceSafepointsPass().run(F, FAM);
+  F.clearGC();
+  FAM.invalidate(F, PA);
 }

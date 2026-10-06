@@ -47,8 +47,9 @@
             "imp::avx2::tests::random",
             "imp::avx2::tests::random",
             "imp::sse2::tests::random",
-            "mp::neon::tests::ones",
-            "imp::neon::tests::zeroes"
+            "imp::neon::tests::ones",
+            "imp::neon::tests::zeroes",
+            "imp::ssse3::tests::random"
         ]
     },
     {
@@ -461,16 +462,15 @@
         "version": "2.1.3"
     },
     {
-        "name": "utf-8",
-        "version": "0.7.6"
-    },
-    {
         "name": "smallvec",
         "version": "1.15.1"
     },
     {
         "name": "tracing-core",
-        "version": "0.1.36"
+        "version": "0.1.36",
+        "exclude": [
+            "metadata::tests::level_filter_reprs"
+        ]
     },
     {
         "name": "thread_local",

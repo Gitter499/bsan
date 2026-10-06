@@ -571,21 +571,77 @@ unsafe extern "C" fn __bsan_expose_prov_impl(bor_tag: BorTag, alloc_info: *mut A
     });
 }
 
+#[repr(C)]
+pub enum PruneResult {
+    // This allocations's tree is entirely empty and
+    // its reference count is zero. It can be removed
+    // as long as it is no longer on the shadow stack.
+    // Otherwise, it must be kept around for the next
+    // collection.
+    Eject = 0,
+    // At least one node is still somewhere in shadow
+    // memory with a nonzero reference count. We can
+    // remove it from the pending set. It'll be re-queued
+    // when its reference count hits zero again.
+    Remove = 1,
+    // This allocation's reference count is zero, but
+    // it still has nodes that have yet to be pruned.
+    // This is equivalent to Eject, but
+    Retain = 2,
+}
+
 /// Prunes a series of nodes that are identified by the list of borrow tags.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __bsan_prune(
     alloc_info: NonNull<AllocInfo>,
     bor_tags: *const BorTag,
     len: usize,
-) -> bool {
+) -> PruneResult {
     let global_ctx = unsafe { global_ctx() };
     let alloc: AllocInfoPtr = alloc_info.into();
-    let dead_tags: &[BorTag] = unsafe { slice::from_raw_parts(bor_tags, len) };
-    if let Some(tree) = alloc.state.lock().tree_opt_mut() {
-        tree.remove_dead_tags(global_ctx, dead_tags)
+    let dead_tags = if len > 0 {
+        unsafe { slice::from_raw_parts(bor_tags, len) }
     } else {
-        // The tree is already deallocated, so we can zero out dead_tags
-        false
+        // We pass a null pointer for `bor_tags` when the list is empty.
+        // The function `slice::from_raw_parts` requires a nonnull
+        // pointer, even for an empty slice.
+        &[]
+    };
+    if let Some(mut state) = alloc.state.try_lock() {
+        let absent_from_heap = alloc.rc.get() == 0;
+        let tree_is_empty = if let Some(tree) = state.tree_opt_mut() {
+            tree.remove_dead_tags(global_ctx, dead_tags)
+        } else {
+            true
+        };
+        // Even if we have removed every tag, this does
+        // not imply that the tree's reference count is
+        // also zero. We reuse allocation metadata objects
+        // for different lifetimes of stack allocations. If
+        // a stack allocation was stored into the heap during a
+        // previous lifetime, then its allocation-level
+        // reference count may be greater than the sum of its
+        // node level reference counts.
+        if tree_is_empty {
+            if absent_from_heap {
+                PruneResult::Eject
+            } else {
+                // The tree only has one node left,
+                // but the node is on the heap somewhere,
+                // so we can remove it from the pending set
+                // and wait for it to be requeued.
+                PruneResult::Remove
+            }
+        } else {
+            // One or more nodes are dead but could not
+            // be pruned, due to live nodes with blocking
+            // permissions. Keep this allocation and any
+            // of its remaining dead nodes around in the
+            // pending set.
+            PruneResult::Retain
+        }
+    } else {
+        panic!("A thread had already locked this allocation!");
     }
 }
 

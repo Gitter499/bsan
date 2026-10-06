@@ -47,55 +47,58 @@ void BorTagSet::erase(BorTag tag) {
   for (uptr j = i; j + 1 < size(); ++j) {
     (*this)[j] = (*this)[j + 1];
   }
-  end_--;
+  size_--;
 }
 
 void BorTagSet::EnsureCapacity(uptr req_size) {
-  uptr old_capacity = last_ - begin_;
-  uptr old_size = size();
-  if (req_size > old_capacity) {
-    uptr capacity = old_capacity * 2;
-    if (capacity == 0)
+  if (req_size > capacity_) {
+    uptr capacity = capacity_ * 2;
+    if (capacity < 16)
       capacity = 16;
     if (capacity < req_size)
       capacity = req_size;
+    CHECK_LE(capacity, (u32)-1);
 
     BorTag *p = (BorTag *)InternalAlloc(capacity * sizeof(BorTag));
+    internal_memcpy(p, data(), size_ * sizeof(BorTag));
+    if (!isInline())
+      InternalFree(heap_);
 
-    // We only need to free and copy over if the set
-    // already contains elements.
-    if (old_capacity && capacity) {
-      internal_memcpy(p, begin_, old_size * sizeof(BorTag));
-      InternalFree(begin_);
-    }
-
-    begin_ = p;
-    last_ = begin_ + capacity;
+    heap_ = p;
+    capacity_ = capacity;
   }
-  end_ = begin_ + req_size;
+  size_ = req_size;
 }
 
-void ConcreteProvenanceSet::insert(Provenance prov) {
-  if (prov.isConcrete()) {
+void ProvenanceSet::insert(BlockIndex idx) {
+  if (!set_.contains(idx)) {
+    set_[idx] = BorTagSet();
+  }
+}
+
+void ProvenanceSet::insert(Provenance prov) {
+  if (CONCRETE(prov.tag)) {
     set_[BLOCK_IDX(prov.block)].insert(prov.tag);
   }
 }
 
-void ConcreteProvenanceSet::clear() {
+void ProvenanceSet::clear() {
   set_.forEach([](DenseMap<BlockIndex, BorTagSet>::value_type &KV) {
     KV.second.clear();
     return true;
   });
 }
 
-bool ConcreteProvenanceSet::contains(Provenance prov) {
+bool ProvenanceSet::contains(BlockIndex idx) { return find(idx) != nullptr; }
+
+bool ProvenanceSet::contains(Provenance prov) {
   if (auto *tags = find(BLOCK_IDX(prov.block))) {
     return tags->contains(prov.tag);
   }
   return false;
 }
 
-ConcreteProvenanceSet::~ConcreteProvenanceSet() {
+ProvenanceSet::~ProvenanceSet() {
   set_.forEach([](DenseMap<BlockIndex, BorTagSet>::value_type &KV) {
     KV.second.reset();
     return true;
