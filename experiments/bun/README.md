@@ -2,7 +2,7 @@
 
 BorrowSanitizer (BSan) run on [Bun](https://github.com/oven-sh/bun) at `bc7a813b10`. Repros re-checked on BSan from upstream main `0302f58`.
 
-## Bun bugs found: 4
+## Bun bugs found: 5
 
 | # | Where | Bug | Fix |
 |---|---|---|---|
@@ -10,14 +10,15 @@ BorrowSanitizer (BSan) run on [Bun](https://github.com/oven-sh/bun) at `bc7a813b
 | 2 | `bun_ast` node store (every parse) | pointer taken from a `Box`, then the `Box` is moved | [patch](bun-patches/fix-ast-store-current.patch) |
 | 3 | `bun_alloc` AST allocator (every parse) | each allocation reborrows the whole arena, invalidating earlier pointers | [patch](bun-patches/fix-ast-alloc.patch) |
 | 4 | `bun_jsc` VM / event loop (every run) | VM ↔ event-loop self-pointers used while `&mut` is live | partial ([patch](jsc/fix-03-ensure_waker-partial.patch)); a full fix needs a refactor |
+| 5 | `bun_alloc` `BSSList` (resolver's directory-entry cache, past ~8.4k entries) | each append reborrows a whole overflow block, and chaining a new block re-`Box`es the old one; both invalidate earlier entry pointers, then `Entry::kind` writes through one | [patch](bun-patches/fix-bss-list-append.patch) |
 
-All four are aliasing UB (Tree Borrows). None is known to crash today, but the
-compiler is allowed to miscompile them. Bugs 1–3 reproduce on Bun's own code,
+All five are aliasing UB (Tree Borrows). None is known to crash today, but the
+compiler is allowed to miscompile them. Bugs 1–3 and 5 reproduce on Bun's own code,
 and their fixes make the repros pass: [REPRO.md](REPRO.md).
 
 ## BSan issues found: 6
 
-1. **Slowdown:** quadratic time and GBs of memory on ordinary loops. Workaround: `BSAN_OPTIONS=wildcard=0`.
+1. **Slowdown:** quadratic time and GBs of memory on ordinary loops. Workaround: `BSAN_OPTIONS=wildcard=0`. Still present on upstream main `0302f58` (Bun's Adler-32 test: 1 s fast mode, out of memory after 333 s default mode).
 2. **Missing line numbers:** some locations print as line 0.
 3. **Proc-macro doctests:** `cargo bsan test` fails on them.
 4. **Runtime bundling:** the BSan runtime is copied into every rlib.

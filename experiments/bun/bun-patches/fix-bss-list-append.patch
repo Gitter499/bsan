@@ -1,0 +1,138 @@
+--- a/src/bun_alloc/lib.rs
++++ b/src/bun_alloc/lib.rs
+@@ -1611,7 +1611,11 @@
+ #[repr(C)]
+ struct BSSListOverflowBlock<ValueType> {
+     pub(crate) used: AtomicU16,
+-    pub(crate) prev: Option<Box<BSSListOverflowBlock<ValueType>>>,
++    // Raw, not `Box`: turning the previous head back into a `Box` when a new block is
++    // chained would retag the whole block and invalidate every slot pointer already
++    // handed out from it (callers keep those, e.g. the resolver's `Entry` cache). The
++    // chain is reclaimed as `Box`es only in `Drop`.
++    pub(crate) prev: Option<NonNull<BSSListOverflowBlock<ValueType>>>,
+     // Only `[0..used]` is initialized.
+     pub data: [MaybeUninit<ValueType>; BSS_LIST_CHUNK_SIZE],
+ }
+@@ -1632,21 +1636,40 @@
+ 
+     /// Reserve a slot and return its uninitialized storage. Caller MUST
+     /// initialize the slot before any other access.
++    ///
++    /// Takes `*mut Self` and projects `data` with `addr_of_mut!`: `&mut self` (or
++    /// `self.data.as_mut_ptr()`, which reborrows the whole array) would be a fresh
++    /// unique borrow over every slot handed out earlier, invalidating those pointers.
++    ///
++    /// SAFETY: `this` must point to a live, initialized block.
+     #[inline(always)]
+-    pub(crate) fn append_uninit(
+-        &mut self,
++    pub(crate) unsafe fn append_uninit(
++        this: *mut Self,
+     ) -> core::result::Result<*mut MaybeUninit<ValueType>, AllocError> {
+-        let index = self.used.fetch_add(1, Ordering::AcqRel);
++        // SAFETY: `this` is live; only the `used` field is borrowed (shared, atomic).
++        let index = unsafe { (*this).used.fetch_add(1, Ordering::AcqRel) };
+         if index as usize >= BSS_LIST_CHUNK_SIZE {
+             return Err(AllocError);
+         }
+-        // SAFETY: `index < BSS_LIST_CHUNK_SIZE` checked above.
+-        Ok(unsafe { self.data.as_mut_ptr().add(index as usize) })
++        // SAFETY: `index < BSS_LIST_CHUNK_SIZE` checked above; raw projection, no reborrow.
++        Ok(unsafe {
++            addr_of_mut!((*this).data)
++                .cast::<MaybeUninit<ValueType>>()
++                .add(index as usize)
++        })
+     }
+ }
+ 
+-// `deinit` for OverflowBlock: walks `prev` and frees each. With `prev: Option<Box<..>>`,
+-// `Drop` handles the chain automatically — no explicit impl needed.
++// `deinit` for OverflowBlock: walks `prev` and frees each.
++impl<ValueType> Drop for BSSListOverflowBlock<ValueType> {
++    fn drop(&mut self) {
++        if let Some(prev) = self.prev.take() {
++            // SAFETY: every `prev` was `Box::into_raw`'d by `append_overflow_uninit`
++            // and is owned solely by this block. Dropping it frees the rest of the chain.
++            drop(unsafe { Box::from_raw(prev.as_ptr()) });
++        }
++    }
++}
+ 
+ impl<ValueType, const COUNT: usize> BSSList<ValueType, COUNT> {
+     const MAX_INDEX: usize = COUNT - 1;
+@@ -1686,13 +1709,20 @@
+     /// Reserve an overflow slot and return its uninitialized storage. Mutex is
+     /// held by the caller (`append_uninit`). Cold path — only hit after the
+     /// `COUNT`-sized backing buffer fills.
++    ///
++    /// Takes `*mut Self` for the same reason as `BSSListOverflowBlock::append_uninit`:
++    /// `&mut self` would reborrow `backing_buf` and `tail`, invalidating slots handed
++    /// out earlier.
++    ///
++    /// SAFETY: `this` must point to a live, initialized `BSSList` whose mutex is held.
+     #[cold]
+-    fn append_overflow_uninit(
+-        &mut self,
++    unsafe fn append_overflow_uninit(
++        this: *mut Self,
+     ) -> core::result::Result<*mut MaybeUninit<ValueType>, AllocError> {
+-        self.used += 1;
++        // SAFETY: caller contract; field-level place accesses only.
++        unsafe { (*this).used += 1 };
+         // SAFETY: head is always non-null after init_at() (points at self.tail or heap block).
+-        let mut head_ptr = self.head.unwrap();
++        let mut head_ptr = unsafe { (*this).head }.unwrap();
+         // Check capacity first, allocate the new block if
+         // needed, then reserve exactly one slot. Safe under `self.mutex`.
+         // SAFETY: `head_ptr` is a valid exclusive ref (mutex held).
+@@ -1710,22 +1740,25 @@
+             // Preserve the chain (`new_block.prev` = old head). The inline `self.tail`
+             // is not Boxed, so represent it as `prev = None`; heap heads were
+             // `Box::into_raw`'d by an earlier call here and are reclaimed as `Box`.
+-            let tail_ptr: *const BSSListOverflowBlock<ValueType> = core::ptr::addr_of!(self.tail);
++            // SAFETY: raw projection of `tail`, no reborrow.
++            let tail_ptr: *const BSSListOverflowBlock<ValueType> =
++                unsafe { core::ptr::addr_of!((*this).tail) };
+             new_block.prev = if core::ptr::eq(head_ptr.as_ptr().cast_const(), tail_ptr) {
+                 None
+             } else {
+-                // SAFETY: the previous head was `Box::into_raw`'d by an earlier
+-                // `append_overflow_uninit` and is exclusively owned via `self.head`.
+-                Some(unsafe { Box::from_raw(head_ptr.as_ptr()) })
++                // The previous head was `Box::into_raw`'d by an earlier
++                // `append_overflow_uninit`; ownership moves to `new_block.prev`.
++                Some(head_ptr)
+             };
+             let raw = Box::into_raw(new_block);
+             // SAFETY: raw came from Box::into_raw on the line above; non-null and exclusively owned.
+             head_ptr = unsafe { NonNull::new_unchecked(raw) };
+-            self.head = Some(head_ptr);
++            // SAFETY: caller contract; field-level write.
++            unsafe { (*this).head = Some(head_ptr) };
+         }
+         // SAFETY: `head_ptr` is the (possibly freshly-allocated) head block with
+         // free capacity; no other alias exists (mutex held).
+-        unsafe { (*head_ptr.as_ptr()).append_uninit() }
++        unsafe { BSSListOverflowBlock::append_uninit(head_ptr.as_ptr()) }
+     }
+ 
+     /// Reserve a slot and return its uninitialized storage. Caller MUST
+@@ -1761,11 +1794,15 @@
+         // formed before the lock); `index <= MAX_INDEX < COUNT` is checked.
+         unsafe {
+             if (*this).used as usize > Self::MAX_INDEX {
+-                (*this).append_overflow_uninit()
++                Self::append_overflow_uninit(this)
+             } else {
+                 let index = (*this).used as usize;
+                 (*this).used += 1;
+-                Ok((*this).backing_buf.as_mut_ptr().add(index))
++                // Raw projection: `backing_buf.as_mut_ptr()` would reborrow the whole
++                // array as `&mut`, invalidating every slot handed out earlier.
++                Ok(addr_of_mut!((*this).backing_buf)
++                    .cast::<MaybeUninit<ValueType>>()
++                    .add(index))
+             }
+         }
+     }

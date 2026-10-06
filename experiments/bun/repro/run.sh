@@ -5,7 +5,10 @@ set -u
 H=/workspaces/bsan-bun
 P=$H/bun-patches
 cd /workspaces/bun
-[ -f src/zlib/tests/bsan_repro.rs ] || git apply "$P/0004-bsan-repro-tests.patch"
+if [ ! -f src/bun_alloc/tests/bsan_bsslist.rs ]; then  # (re)apply the latest repro tests
+  rm -f src/zlib/tests/bsan_repro.rs src/bun_alloc/tests/bsan_repro.rs
+  git apply "$P/0004-bsan-repro-tests.patch"
+fi
 export RUST_MIN_STACK=67108864
 mkdir -p "$H/logs/repro"
 CLIBS="-Clink-arg=@$H/native/out/clibs.rsp"
@@ -27,6 +30,7 @@ case_() {
 
 ZLIB=(-p bun_zlib --test bsan_repro)
 ALLOC=(-p bun_alloc --test bsan_repro)
+BSS=(-p bun_alloc --test bsan_bsslist)
 STORE=(-p bun_parsers --lib -- json::tests::env_json --exact)
 FLOAT=(-p bun_parsers --lib -- json::tests::lenient_numbers --exact)
 
@@ -36,6 +40,8 @@ case_ 2-ast-store       report -                                       "${STORE[
 case_ 2-ast-store-fixed pass   "$P/fix-ast-store-current.patch"        "${STORE[@]}"
 case_ 3-ast-alloc       report -                                       "${ALLOC[@]}"
 case_ 3-ast-alloc-fixed pass   "$P/fix-ast-alloc.patch"                "${ALLOC[@]}"
+case_ 5-bss-list        report -                                       "${BSS[@]}"
+case_ 5-bss-list-fixed  pass   "$P/fix-bss-list-append.patch"          "${BSS[@]}"
 # Was a BSan false positive in safe float parsing (BSan main b1c71a3); fixed on upstream
 # main 0302f58. Needs bug 2's fix to get past bug 2.
 case_ fp-float-parse    pass   "$P/fix-ast-store-current.patch"        "${FLOAT[@]}"

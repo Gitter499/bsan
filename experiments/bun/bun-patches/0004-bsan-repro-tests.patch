@@ -1,3 +1,35 @@
+diff --git a/src/bun_alloc/tests/bsan_bsslist.rs b/src/bun_alloc/tests/bsan_bsslist.rs
+new file mode 100644
+index 00000000..3a6c2b86
+--- /dev/null
++++ b/src/bun_alloc/tests/bsan_bsslist.rs
+@@ -0,0 +1,26 @@
++// BSan repro: BSSList (the resolver's EntryStore, resolver/fs.rs:33) slot pointers are
++// invalidated by later appends once the list spills into heap overflow blocks. Production:
++// readdir appends entries (resolver/fs.rs:495-502), later `Entry::kind` (fs.rs:222) writes
++// `self.cache.set(..)` into an entry stored before more appends.
++use bun_alloc::BSSList;
++use core::cell::Cell;
++
++type Slot = Cell<u32>;
++
++bun_alloc::bss_list! { entries : Slot, 2 }
++
++#[test]
++fn bss_list_heap_block_slot_write() {
++    // 2 inline + 256 in the inline tail block + 256 in heap block 1 + 5 in heap block 2.
++    let slots: Vec<*mut Slot> = (0..2 + 256 + 256 + 5)
++        .map(|i| {
++            let slot = unsafe { BSSList::append_uninit(entries()) }.expect("append");
++            let p = unsafe { (*slot).as_mut_ptr() }; // as resolver/fs.rs:502
++            unsafe { p.write(Cell::new(i as u32)) };
++            p
++        })
++        .collect();
++    let e = unsafe { &*slots[2 + 256] }; // first entry of heap block 1
++    e.set(100); // `Entry::kind`: self.cache.set(c)
++    assert_eq!(e.get(), 100);
++}
 diff --git a/src/bun_alloc/tests/bsan_repro.rs b/src/bun_alloc/tests/bsan_repro.rs
 new file mode 100644
 index 00000000..79187ce5
