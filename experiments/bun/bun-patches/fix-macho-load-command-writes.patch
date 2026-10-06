@@ -1,0 +1,43 @@
+--- a/src/exe_format/macho.rs
++++ b/src/exe_format/macho.rs
+@@ -369,7 +369,18 @@
+         let aligned_previous = align_size(previous_fileoff, PAGE_SIZE);
+         let aligned_linkedit = align_size(new_linkedit_fileoff, PAGE_SIZE);
+ 
+-        let mut iter = self.iterator();
++        // Collect the commands first, then write through a pointer derived from
++        // `&mut self.data`. Writing through the iterator's slice (`entry.data`, derived
++        // from `&self.data`) would be a write through a shared reference.
++        let cmds: Vec<(macho::load_command, usize, usize)> = {
++            let mut iter = self.iterator();
++            let mut cmds = Vec::new();
++            while let Some(entry) = iter.next() {
++                cmds.push((entry.hdr, entry.offset, entry.data.len()));
++            }
++            cmds
++        };
++        let cmds_base: *mut u8 = self.data[size_of::<macho::mach_header_64>()..].as_mut_ptr();
+ 
+         // Create shifter with validated parameters
+         let shifter = Shifter {
+@@ -379,15 +390,16 @@
+             linkedit_filesize: new_linkedit_filesize,
+         };
+ 
+-        while let Some(entry) = iter.next() {
+-            let cmd = entry.hdr;
+-            let cmd_ptr: *mut u8 = entry.data.as_ptr().cast_mut();
++        for (cmd, cmd_offset, cmd_len) in cmds {
++            // SAFETY: `cmd_offset` is the command's offset within the load-command region
++            // that `iterator()` walked, which starts at `cmds_base`.
++            let cmd_ptr: *mut u8 = unsafe { cmds_base.add(cmd_offset) };
+ 
+             // `cmdsize` (= `entry.data.len()`) is untrusted; reject commands too
+             // small for the typed struct we're about to read/write so the
+             // unaligned access stays within this command's bytes.
+             let require = |sz: usize| -> Result<(), MachoError> {
+-                if entry.data.len() < sz {
++                if cmd_len < sz {
+                     return Err(MachoError::InvalidObject);
+                 }
+                 Ok(())

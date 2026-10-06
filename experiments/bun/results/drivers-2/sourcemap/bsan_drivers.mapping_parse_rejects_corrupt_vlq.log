@@ -1,0 +1,18 @@
+
+running 1 test
+test mapping_parse_rejects_corrupt_vlq ... FAILED
+
+failures:
+
+---- mapping_parse_rejects_corrupt_vlq stdout ----
+
+thread 'mapping_parse_rejects_corrupt_vlq' (2789) panicked at src/sourcemap/tests/bsan_drivers.rs:229:22:
+"AAAA,CAAC" should fail
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    mapping_parse_rejects_corrupt_vlq
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.02s
+

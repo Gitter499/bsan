@@ -1,0 +1,3 @@
+
+running 1 test
+test dev_server_provider_json ... bsan-bun: test reached unprovided FFI/dispatch symbol `Bun__StackCheck__getMaxStack`

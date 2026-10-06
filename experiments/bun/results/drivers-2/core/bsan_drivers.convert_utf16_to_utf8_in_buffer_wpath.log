@@ -1,0 +1,6 @@
+
+running 1 test
+test convert_utf16_to_utf8_in_buffer_wpath ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 0.13s
+

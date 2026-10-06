@@ -1,0 +1,25 @@
+
+running 1 test
+error: Undefined Behavior: write access through <435126>(StrongProtector) at alloc46956[0x20] is forbidden
+ --> bs13a39a5ve5fgf32phmjtswt:0:0
+  = help: the accessed tag <435126>(StrongProtector) is a child of the conflicting tag <278378>(unprotected)
+  = help: the conflicting tag <278378>(unprotected) has state Frozen which forbids this child write access
+help: the accessed tag <435126>(StrongProtector) was created here
+ --> bs13a39a5ve5fgf32phmjtswt:0:0
+help: the conflicting tag <278378>(unprotected) was created here, in the initial state Reserved
+ --> 6ddzimbcr9niawhjl0vkp943o:0:0
+help: the conflicting tag <278378>(unprotected) later transitioned to Unique due to a child write access at offsets [0x10..0x28]
+ --> 6ddzimbcr9niawhjl0vkp943o:0:0
+  = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
+help: the conflicting tag <278378>(unprotected) later transitioned to Frozen due to a reborrow (acting as a foreign read access) at offsets [0x10..0x1810]
+ --> dkkfioarn8skeut7qxuih7muc:0:0
+  = help: this transition corresponds to a loss of write permissions
+
+stack backtrace:
+0: 0x5654a60f5f7c
+1: 0x5654a60bd579
+2: 0x5654a60bd07e
+
+warning: Symbolizer not found. Please add llvm-symbolizer to your PATH or set BSAN_SYMBOLIZER for source code info (recommended).
+
+note: stack trace was truncated after 3 frames; set stacktrace_max_len (e.g. BSAN_OPTIONS=stacktrace_max_len=32) to capture more.

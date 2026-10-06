@@ -1,0 +1,3 @@
+
+running 1 test
+test print_source_map_contents_from_internal_json ... bsan-bun: test reached unprovided FFI/dispatch symbol `Bun__StackCheck__getMaxStack`

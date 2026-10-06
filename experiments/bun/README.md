@@ -2,7 +2,7 @@
 
 BorrowSanitizer (BSan) run on [Bun](https://github.com/oven-sh/bun) at `bc7a813b10`. Repros re-checked on BSan from upstream main `0302f58`.
 
-## Bun bugs found: 5
+## Bun bugs found: 6
 
 | # | Where | Bug | Fix |
 |---|---|---|---|
@@ -11,8 +11,9 @@ BorrowSanitizer (BSan) run on [Bun](https://github.com/oven-sh/bun) at `bc7a813b
 | 3 | `bun_alloc` AST allocator (every parse) | each allocation reborrows the whole arena, invalidating earlier pointers | [patch](bun-patches/fix-ast-alloc.patch) |
 | 4 | `bun_jsc` VM / event loop (every run) | VM ↔ event-loop self-pointers used while `&mut` is live | partial ([patch](jsc/fix-03-ensure_waker-partial.patch)); a full fix needs a refactor |
 | 5 | `bun_alloc` `BSSList` (resolver's directory-entry cache, past ~8.4k entries) | each append reborrows a whole overflow block, and chaining a new block re-`Box`es the old one; both invalidate earlier entry pointers, then `Entry::kind` writes through one | [patch](bun-patches/fix-bss-list-append.patch) |
+| 6 | `bun_exe_format` Mach-O writer (`bun build --compile` for macOS) | `update_load_command_offsets` writes load commands through a pointer derived from `&self.data` (a shared reference) | [patch](bun-patches/fix-macho-load-command-writes.patch) |
 
-All five are aliasing UB (Tree Borrows). None is known to crash today, but the
+All six are aliasing UB (Tree Borrows). None is known to crash today, but the
 compiler is allowed to miscompile them. Bugs 1–3 and 5 reproduce on Bun's own code,
 and their fixes make the repros pass: [REPRO.md](REPRO.md).
 
@@ -30,6 +31,7 @@ and their fixes make the repros pass: [REPRO.md](REPRO.md).
 - **Bun's own tests:** 25 crates. Only `bun_parsers` reported (bug 2).
 - **New driver tests for C-library wrappers:** zlib, zstd, brotli, libdeflate, picohttpparser, libarchive. Only zlib reported (bug 1).
 - **A BSan-instrumented `bun-debug`:** bugs 2–4 ([jsc/REPORT.md](jsc/REPORT.md)).
+- **Second round of drivers** ([`0005`](bun-patches/0005-bsan-drivers-2.patch), [`results/drivers-2/`](results/drivers-2)): `bun_alloc` 38 tests (bug 5), `bun_core` 45 (clean), `bun_sys` 38 (clean), `bun_exe_format` 9 (bug 6), `bun_sourcemap` 15 (5 clean; 7 need a C++ stack-check symbol, 3 failed their assertions). `bun_io` (16) does not build yet.
 - **Not run:** `bun_css` and `bun_bundler` (compiler out of memory), `bun_router`.
 
 ## Running it

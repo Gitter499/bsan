@@ -1,0 +1,20 @@
+
+running 1 test
+test bundler_join_chunks_and_finalize_shifts ... FAILED
+
+failures:
+
+---- bundler_join_chunks_and_finalize_shifts stdout ----
+
+thread 'bundler_join_chunks_and_finalize_shifts' (2712) panicked at src/sourcemap/tests/bsan_drivers.rs:774:9:
+assertion `left == right` failed
+  left: (0, 2, 12)
+ right: (0, 3, 0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    bundler_join_chunks_and_finalize_shifts
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.21s
+

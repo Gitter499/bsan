@@ -1,0 +1,20 @@
+
+running 1 test
+test runtime_printer_internal_source_map ... FAILED
+
+failures:
+
+---- runtime_printer_internal_source_map stdout ----
+
+thread 'runtime_printer_internal_source_map' (2810) panicked at src/sourcemap/tests/bsan_drivers.rs:604:9:
+assertion `left == right` failed: 9:0
+  left: (7, 12)
+ right: (8, 0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    runtime_printer_internal_source_map
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.66s
+

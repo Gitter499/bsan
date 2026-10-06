@@ -1,0 +1,20 @@
+
+running 1 test
+test get_lines_in_text_css_error ... FAILED
+
+failures:
+
+---- get_lines_in_text_css_error stdout ----
+
+thread 'get_lines_in_text_css_error' (1139) panicked at src/bun_core/tests/bsan_drivers.rs:652:5:
+assertion `left == right` failed
+  left: Some([10, 32, 32, 99, 111, 108, 111, 114, 58, 32, 114, 195, 169, 100, 59, 10])
+ right: Some([32, 32, 99, 111, 108, 111, 114, 58, 32, 114, 195, 169, 100, 59])
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    get_lines_in_text_css_error
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 46 filtered out; finished in 0.04s
+

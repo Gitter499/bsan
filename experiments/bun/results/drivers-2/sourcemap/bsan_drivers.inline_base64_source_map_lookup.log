@@ -1,0 +1,3 @@
+
+running 1 test
+test inline_base64_source_map_lookup ... bsan-bun: test reached unprovided FFI/dispatch symbol `Bun__StackCheck__getMaxStack`

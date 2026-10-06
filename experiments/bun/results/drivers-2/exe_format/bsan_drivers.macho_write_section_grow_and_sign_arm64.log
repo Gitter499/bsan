@@ -1,0 +1,80 @@
+
+running 1 test
+test macho_write_section_grow_and_sign_arm64 ... error: Undefined Behavior: write access through <695280>(unprotected) at alloc111681[0x1e0] is forbidden
+    --> /workspaces/bun/src/exe_format/macho.rs:474:25
+     |
+ 474 | core::ptr::write_unaligned(
+     | ^
+     = note: the above line calls library code, where the error was detected:
+    --> /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:1966:41
+     |
+1966 | intrinsics::write_via_move(dst, src)
+     |                                 ^
+     = help: the accessed tag <695280>(unprotected) has state Frozen which forbids this child write access
+help: the accessed tag <695280>(unprotected) was created here, in the initial state Frozen
+    --> /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/slice/mod.rs:730:0
+     |
+ 730 | pub const fn as_ptr(&self) -> *const T {
+     | ^
+
+stack backtrace:
+0: core::ptr::write::<core::ptr::Unaligned<bun_exe_format::macho_types::dyld_info_command>>
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:1966:41
+1: core::ptr::write_unaligned::<bun_exe_format::macho_types::dyld_info_command>
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ptr/mod.rs:2059:14
+2: <bun_exe_format::macho::MachoFile>::update_load_command_offsets
+      at /workspaces/bun/src/exe_format/macho.rs:474:25
+3: <bun_exe_format::macho::MachoFile>::write_section
+      at /workspaces/bun/src/exe_format/macho.rs:339:18
+4: bsan_drivers::macho_write_section_grow_and_sign_arm64
+      at 14kwa2xo5avlncghbhuokf8l1
+5: bsan_drivers::macho_write_section_grow_and_sign_arm64::{closure#0}
+      at emhe5e8ahd0x0aeoozzrs04s9
+6: <bsan_drivers::macho_write_section_grow_and_sign_arm64::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+      at c7zk5b97rknhkxtgzgry1ijk1
+7: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+      at test.7c980dd6c3cacadd-cgu.00
+8: test::__rust_begin_short_backtrace::<core::result::Result<(), alloc::string::String>, fn() -> core::result::Result<(), alloc::string::String>>
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/test/src/lib.rs
+9: <test::types::RunnableTest>::run
+      at test.7c980dd6c3cacadd-cgu.04
+10: test::run_test_in_process::{closure#0}
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/test/src/lib.rs:724:74
+11: <core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}> as core::ops::function::FnOnce<()>>::call_once
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:276:6
+12: std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>, core::result::Result<(), alloc::string::String>>
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/panicking.rs
+13: std::panicking::catch_unwind::<core::result::Result<(), alloc::string::String>, core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>>
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/panicking.rs:544:16
+14: std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<test::run_test_in_process::{closure#0}>, core::result::Result<(), alloc::string::String>>
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/panic.rs:359:14
+15: test::run_test_in_process
+      at test.7c980dd6c3cacadd-cgu.00
+16: test::run_test::{closure#0}
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/test/src/lib.rs:645:43
+17: test::run_test::{closure#1}
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/test/src/lib.rs:675:82
+18: std::sys::backtrace::__rust_begin_short_backtrace::<test::run_test::{closure#1}, ()>
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/backtrace.rs:169:5
+19: std::thread::lifecycle::spawn_unchecked::<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/thread/lifecycle.rs:70:13
+20: <core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}> as core::ops::function::FnOnce<()>>::call_once
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs
+21: std::panicking::catch_unwind::do_call::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()>
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/panicking.rs:575:6
+22: std::panicking::catch_unwind::<(), core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>>
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/panicking.rs
+23: std::panic::catch_unwind::<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1}::{closure#0}>, ()>
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/panic.rs:359:14
+24: std::thread::lifecycle::spawn_unchecked::<test::run_test::{closure#1}, ()>::{closure#1}
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/thread/lifecycle.rs:68:26
+25: <std::thread::lifecycle::spawn_unchecked<test::run_test::{closure#1}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+26: <alloc::boxed::Box<dyn core::ops::function::FnOnce<(), Output = ()> + core::marker::Send> as core::ops::function::FnOnce<()>>::call_once
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/alloc/src/boxed.rs:2314:9
+27: <std::sys::thread::unix::Thread>::new::thread_start
+      at /home/user/aces-test/home/.rustup/toolchains/bsan/lib/rustlib/src/rust/library/std/src/sys/thread/unix.rs:127:17
+28: bsan_thread_start(void*)
+      at bsan_interceptors.cpp
+29: clone
+      at misc/../sysdeps/unix/sysv/linux/x86_64/clone.S:102

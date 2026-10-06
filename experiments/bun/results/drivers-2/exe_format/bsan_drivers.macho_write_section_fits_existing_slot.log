@@ -1,0 +1,3 @@
+
+running 1 test
+test macho_write_section_fits_existing_slot ... bsan-bun: test reached unprovided FFI/dispatch symbol `EVP_sha256`
